@@ -1,0 +1,40 @@
+# Machine type definitions.
+#
+# Lives in orchestrator config, not in tux2lab: tux2lab only knows how to
+# provision VMs from an image name; the orchestrator knows which
+# product/machine maps to which image. See architecture doc §3.
+#
+# `code` and `codename` exist purely to build human-readable "fancy"
+# hostnames without leaking the username into VM identity (see naming.py
+# for the open question on whether the username still ends up in the
+# DNS suffix).
+#
+# Loaded and validated at startup by core/config.py (M1): `code` and
+# `codename` must be unique across all entries, all fields required
+# below must be present, and `enabled: false` entries are excluded from
+# what's offered to users but still parsed.
+
+machines:
+  machine_1:
+    display_name: "Machine 1"
+    code: "m01"
+    codename: "aurora"
+    tux2lab_image: "image_1_software_1"
+    protocol: "ssh"
+    enabled: true
+
+  machine_2:
+    display_name: "Machine 2"
+    code: "m02"
+    codename: "forge"
+    tux2lab_image: "image_2_software_2"
+    protocol: "ssh"
+    enabled: true
+
+  machine_3:
+    display_name: "Machine 3"
+    code: "m03"
+    codename: "atlas"
+    tux2lab_image: "image_3_software_3"
+    protocol: "ssh"
+    enabled: true

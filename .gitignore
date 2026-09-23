@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# virtual envs
+.venv/
+venv/
+
+# local DB / runtime artifacts
+*.db
+*.db-journal
+orchestrator.db
+
+# secrets — never committed, ever (architecture doc §12)
+secrets/
+*.pem
+*_id_ed25519
+*_id_rsa
+
+.env
