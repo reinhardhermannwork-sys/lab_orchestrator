@@ -57,6 +57,26 @@ abbreviation — e.g. `machines_config_path` → `LAB_ORCH_MACHINES_CONFIG_PATH`
 not `LAB_ORCH_MACHINES_CONFIG`. Worth double-checking against the field
 name in `core/config.py` before relying on a new one.
 
+## Data layer notes
+
+- **Sync engine + stdlib `sqlite3` driver**, not `aiosqlite`. The
+  quota trigger and partial unique index (below) lean on SQLite's
+  ordinary single-writer locking, which is simplest to reason about
+  synchronously; M5 will wrap DB calls from async routes in a
+  thread-pool executor rather than switching drivers.
+- **`machine_definitions` is a live sync target, not just a mirror of
+  the yaml** — `instances.machine_type` is a real FK into it (FK
+  enforcement is off by default in SQLite; `db/database.py` turns it on
+  per connection). Startup upserts every machine from `machines.yaml`
+  into the table; removing a machine from the yaml does *not* delete
+  its row, since a past instance may still reference it.
+- **Quota enforcement is DB-level, not app-level**: a partial unique
+  index (`user_id` where `state != 'DESTROYED'`) for one-active-per-user,
+  and a `BEFORE INSERT` trigger counting non-`DESTROYED` rows for
+  max-3-active-globally. Both were verified against real concurrent
+  writes (threads + a `Barrier`, not just sequential calls), per the
+  implementation plan's explicit "don't skip this test" instruction.
+
 ## Project layout
 
 ```
@@ -93,8 +113,17 @@ intentional: M0 is scaffolding only.
       app's startup lifespan so invalid config fails fast — verified
       against a real `uvicorn` process, not just `TestClient` (see
       `tests/test_config.py`, `tests/test_startup.py`).
-- [ ] M2 — Data layer (quota constraints at the DB level)
-- [ ] M3 — State machine
+- [x] **M2 — Data layer.** `machine_definitions` + `instances` tables
+      (SQLAlchemy Core), FK from `instances.machine_type` enforced via
+      `PRAGMA foreign_keys=ON`, a CHECK constraint on `state`, and the
+      two DB-level quota guarantees as real constraints (not app-level
+      `if` checks): a partial unique index for one-active-per-user, and
+      a `BEFORE INSERT` trigger for max-3-active-globally. Both verified
+      under genuine concurrent writes with threads + a `Barrier`, run 15x
+      to rule out flakiness (see `tests/test_db_models.py`).
+- [ ] M3 — State machine (the transition function; `InstanceState` itself
+      already exists in `core/state_machine.py`, added early for M2's
+      CHECK constraint)
 - [ ] M4 — Tux2Lab adapter (+ fake client for tests)
 - [ ] M5 — Instance manager + REST API
 - [ ] M6 — Janitor

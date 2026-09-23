@@ -96,6 +96,12 @@ class MachineRegistry:
     def list_enabled(self) -> list[MachineDefinition]:
         return [m for m in self._machines.values() if m.enabled]
 
+    def items(self):
+        """(machine_type, MachineDefinition) pairs — used by db/init_db.py
+        to upsert config/machines.yaml into the machine_definitions table.
+        """
+        return self._machines.items()
+
     def __contains__(self, machine_type: str) -> bool:
         return machine_type in self._machines
 
