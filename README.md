@@ -41,6 +41,22 @@ Run tests:
 pytest
 ```
 
+## Configuration
+
+Settings (`core/config.py`) are env-var driven — `LAB_ORCH_<FIELD_NAME>`,
+uppercased, or a `.env` file in the repo root. Currently defined:
+
+| Env var | Default | Consumed starting |
+|---|---|---|
+| `LAB_ORCH_MACHINES_CONFIG_PATH` | `config/machines.yaml` | M1 |
+| `LAB_ORCH_DB_PATH` | `orchestrator.db` | M2 |
+| `LAB_ORCH_SECRETS_DIR` | `/opt/lab-orchestrator/secrets` | M8 |
+
+Note the derivation is `LAB_ORCH_` + the field name uppercased, not an
+abbreviation — e.g. `machines_config_path` → `LAB_ORCH_MACHINES_CONFIG_PATH`,
+not `LAB_ORCH_MACHINES_CONFIG`. Worth double-checking against the field
+name in `core/config.py` before relying on a new one.
+
 ## Project layout
 
 ```
@@ -72,7 +88,11 @@ intentional: M0 is scaffolding only.
 
 - [x] **M0 — Scaffolding.** Repo skeleton, `pyproject.toml`, app boots,
       `GET /healthz` returns 200 (see `tests/test_main.py`).
-- [ ] M1 — Config & machine definitions
+- [x] **M1 — Config & machine definitions.** `Settings` (env-var driven)
+      and the `config/machines.yaml` loader/validator, wired into the
+      app's startup lifespan so invalid config fails fast — verified
+      against a real `uvicorn` process, not just `TestClient` (see
+      `tests/test_config.py`, `tests/test_startup.py`).
 - [ ] M2 — Data layer (quota constraints at the DB level)
 - [ ] M3 — State machine
 - [ ] M4 — Tux2Lab adapter (+ fake client for tests)

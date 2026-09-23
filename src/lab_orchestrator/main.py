@@ -16,11 +16,17 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from lab_orchestrator.core.config import get_settings, load_machine_definitions
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # --- startup ---
-    # (M1) app.state.machines = load_machine_definitions()
+    settings = get_settings()
+    app.state.settings = settings
+    # Raises MachineConfigError on invalid config — deliberately
+    # unhandled here so startup fails fast and loud (M1 done-when).
+    app.state.machines = load_machine_definitions(settings.machines_config_path)
     # (M2) init_db()
     # (M7) reconcile_on_startup()
     # (M6) janitor_task = asyncio.create_task(janitor_loop())
