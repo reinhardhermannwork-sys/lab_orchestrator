@@ -57,6 +57,22 @@ abbreviation — e.g. `machines_config_path` → `LAB_ORCH_MACHINES_CONFIG_PATH`
 not `LAB_ORCH_MACHINES_CONFIG`. Worth double-checking against the field
 name in `core/config.py` before relying on a new one.
 
+## State machine notes
+
+`core/state_machine.py` encodes two judgment calls the architecture
+doc's diagram doesn't fully settle on its own — both documented in the
+module itself, summarized here:
+
+- **`reconnect` direction.** The diagram's ASCII art draws it ambiguously
+  (a line trailing off without a closed arrowhead). §7's prose
+  ("destroy if no reconnect") settles it: reconnecting during the grace
+  period returns to `CONNECTED`, it doesn't lead deeper into teardown.
+- **Scope of "from any state."** For the 4h lifetime cap and the failure
+  branch, "any state" is read as *any pre-destroy state* — not literally
+  every state, which would produce nonsense like `DESTROYING`
+  re-triggering itself, or an edge out of `DESTROYED` (which must have
+  none — db/models.py's quota trigger depends on that).
+
 ## Data layer notes
 
 - **Sync engine + stdlib `sqlite3` driver**, not `aiosqlite`. The
@@ -121,9 +137,12 @@ intentional: M0 is scaffolding only.
       a `BEFORE INSERT` trigger for max-3-active-globally. Both verified
       under genuine concurrent writes with threads + a `Barrier`, run 15x
       to rule out flakiness (see `tests/test_db_models.py`).
-- [ ] M3 — State machine (the transition function; `InstanceState` itself
-      already exists in `core/state_machine.py`, added early for M2's
-      CHECK constraint)
+- [x] **M3 — State machine.** `Event` enum + `next_state()` in
+      `core/state_machine.py` — pure, stdlib-only. Every legal transition
+      in the diagram is tested explicitly (not derived from the module's
+      own table), plus an exhaustive sweep proving every *other*
+      (state, event) pair raises — not just one hand-picked illegal
+      example (see `tests/test_state_machine.py`).
 - [ ] M4 — Tux2Lab adapter (+ fake client for tests)
 - [ ] M5 — Instance manager + REST API
 - [ ] M6 — Janitor
