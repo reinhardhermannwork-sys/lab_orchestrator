@@ -51,11 +51,57 @@ uppercased, or a `.env` file in the repo root. Currently defined:
 | `LAB_ORCH_MACHINES_CONFIG_PATH` | `config/machines.yaml` | M1 |
 | `LAB_ORCH_DB_PATH` | `orchestrator.db` | M2 |
 | `LAB_ORCH_SECRETS_DIR` | `/opt/lab-orchestrator/secrets` | M8 |
+| `LAB_ORCH_TUX2LAB_SSH_HOST` | *(none — required)* | M4/M5 |
+| `LAB_ORCH_TUX2LAB_SSH_PORT` | `22` | M4/M5 |
+| `LAB_ORCH_TUX2LAB_SSH_USERNAME` | *(none — required)* | M4/M5 |
+| `LAB_ORCH_TUX2LAB_SSH_KEY_PATH` | *(none — required)* | M4/M5 |
+| `LAB_ORCH_TUX2LAB_SSH_KNOWN_HOSTS_PATH` | *(none — see note below)* | M4/M5 |
+| `LAB_ORCH_TUX2LAB_SSH_COMMAND_TIMEOUT` | `30.0` | M4/M5 |
 
 Note the derivation is `LAB_ORCH_` + the field name uppercased, not an
 abbreviation — e.g. `machines_config_path` → `LAB_ORCH_MACHINES_CONFIG_PATH`,
 not `LAB_ORCH_MACHINES_CONFIG`. Worth double-checking against the field
 name in `core/config.py` before relying on a new one.
+
+## Tux2Lab adapter notes
+
+`SSHTux2LabClient` (`adapters/tux2lab_client.py`) has to guess at two
+things the architecture doc doesn't specify, because the host-side
+wrapper doesn't exist yet for this codebase to inspect against:
+
+1. **Wrapper command syntax** — assumed to mirror tux2lab's own CLI
+   exactly (`tux2lab vm install -H <hostname> -i <image>`, etc.), since
+   that's the only syntax the architecture doc documents. `install`'s
+   flags are elided with "..." in the doc, so `-H`/`-i` is this
+   codebase's own extrapolation from `info`/`start`/`remove`'s `-H`
+   convention.
+2. **`vm list`/`vm info` output format** — assumed JSON. "VM not found"
+   detection in `info()` is a best-effort heuristic on stderr text
+   (`"not found"`, `"does not exist"`, etc.), since there's no documented
+   distinct signal for it. This means `install_idempotent`/
+   `remove_idempotent`'s retry-safety is fully reliable against
+   `FakeTux2LabClient` today, but may not reliably detect "already
+   gone"/"not yet created" against a real host until the actual
+   not-found signal is confirmed.
+
+Both are isolated in small, clearly-marked functions specifically so
+they're a small, obvious edit once a real host wrapper exists to test
+against — nothing else in the codebase depends on their exact shape.
+
+What *is* genuinely verified, not assumed: the SSH mechanics themselves.
+`tests/test_tux2lab_client.py` runs a real local `asyncssh` server (key
+generation, auth, command execution, timeout handling) standing in for
+the wrapper, so connection handling, command construction, timeout
+propagation, and error mapping are all tested against real SSH, not
+mocks — only the wrapper's specific CLI dialect remains unverified.
+
+`known_hosts` defaults to *not* being passed to `asyncssh.connect()` at
+all (asyncssh's own default: check `~/.ssh/known_hosts`, fail closed if
+there's no entry) rather than the more obvious-looking
+`known_hosts=None`, which actually **disables host-key verification
+entirely** — a real MITM exposure, never this codebase's default.
+Set `LAB_ORCH_TUX2LAB_SSH_KNOWN_HOSTS_PATH` to point at a specific file
+instead of relying on the container's home directory having one.
 
 ## State machine notes
 
@@ -143,7 +189,17 @@ intentional: M0 is scaffolding only.
       own table), plus an exhaustive sweep proving every *other*
       (state, event) pair raises — not just one hand-picked illegal
       example (see `tests/test_state_machine.py`).
-- [ ] M4 — Tux2Lab adapter (+ fake client for tests)
+- [x] **M4 — Tux2Lab adapter.** `Tux2LabClient` (abstract, matches
+      architecture doc §11's 5-method interface exactly), `FakeTux2LabClient`
+      (in-memory, what M5/M6 develop against day to day), and
+      `SSHTux2LabClient` (real, `asyncssh`-based). Shared input validation
+      on the base class so both implementations enforce the same
+      allowed-charset check before anything crosses the SSH boundary.
+      `install_idempotent`/`remove_idempotent` implement §14.4's
+      check-before-retry requirement. Tested against a **real local SSH
+      server** standing in for the host wrapper, not just mocks — see
+      `tests/test_tux2lab_client.py` and the "Real-host assumptions"
+      note below.
 - [ ] M5 — Instance manager + REST API
 - [ ] M6 — Janitor
 - [ ] M7 — Startup reconciliation

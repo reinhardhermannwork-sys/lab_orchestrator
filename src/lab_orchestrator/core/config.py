@@ -43,9 +43,22 @@ class Settings(BaseSettings):
     # of the lab-wide VM SSH key lives (architecture doc §12).
     secrets_dir: Path = Path("/opt/lab-orchestrator/secrets")
 
-    # SSH connection details for the host-side tux2lab CLI wrapper (host,
-    # port, username, wrapper key path) belong here too, but land in M4
-    # once the Tux2LabClient/asyncssh connection shape is settled.
+    # SSH connection to the host-side tux2lab CLI wrapper (architecture
+    # doc §11). Optional at the Settings level — the fake client and most
+    # tests never need these — but SSHTux2LabClient.from_settings() (M4)
+    # requires host/username/key_path to actually be set before it'll
+    # construct a real client.
+    tux2lab_ssh_host: str | None = None
+    tux2lab_ssh_port: int = 22
+    tux2lab_ssh_username: str | None = None
+    tux2lab_ssh_key_path: Path | None = None  # the wrapper's own key — distinct from
+    # the lab-wide VM key copied into secrets_dir (architecture doc §12), which
+    # authenticates the orchestrator *to the host*, not to any VM.
+    tux2lab_ssh_known_hosts_path: Path | None = None  # None => asyncssh's own
+    # default host-key handling, NOT "disable checking" — see
+    # adapters/tux2lab_client.py's SSHTux2LabClient.from_settings() for why
+    # that distinction matters and how it's preserved.
+    tux2lab_ssh_command_timeout: float = 30.0
 
 
 @lru_cache
