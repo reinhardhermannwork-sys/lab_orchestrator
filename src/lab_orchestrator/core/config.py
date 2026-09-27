@@ -4,10 +4,10 @@ Two independent pieces live here:
 
   - `Settings`: env-var-driven configuration (never hardcode a path
     elsewhere in the codebase — add a field here instead, per the
-    implementation plan's ground rules). Only fields actually consumed
-    so far are defined; SSH connection details for the host-side
-    tux2lab wrapper are deliberately left out until M4 settles
-    asyncssh's exact connection shape, rather than guessed at now.
+    implementation plan's ground rules). Includes the tux2lab SSH
+    connection settings added in M4, once asyncssh's connection shape
+    was settled — see `SSHTux2LabClient.from_settings()` in
+    adapters/tux2lab_client.py for how they're consumed.
 
   - `load_machine_definitions` / `MachineRegistry`: the
     config/machines.yaml loader (architecture doc §3), validated on
