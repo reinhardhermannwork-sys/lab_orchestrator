@@ -133,6 +133,70 @@ stronger guarantee than the plan's one named example
 `DESTROYED` really has zero outgoing transitions, since M2's quota trigger
 silently depends on that.
 
+## M4 — Tux2Lab adapter
+
+`Tux2LabClient` (abstract, matches the architecture doc §11's 5-method
+interface exactly), `FakeTux2LabClient` (in-memory — what M5/M6 develop
+against day to day), and `SSHTux2LabClient` (real, `asyncssh`-based).
+Input validation lives once on the base class's public methods, so both
+implementations enforce identical allowed-charset checks before anything
+reaches the SSH boundary — not just matching method signatures.
+
+**Judgment calls:**
+- `install_idempotent`/`remove_idempotent` were added beyond the
+  architecture doc's literal 5-method interface, to implement §14.4's
+  "check `info`/`list` before retrying a mutating call" requirement once,
+  on the base class, rather than leaving every caller to reimplement it.
+- `VMInfo` deliberately excludes TCP/22 reachability — tux2lab has no way
+  to know how reachable a VM is from the orchestrator container's network
+  position, so that check belongs in M5's readiness-polling logic, not
+  this adapter.
+- `known_hosts` defaults to not being passed to `asyncssh.connect()` at
+  all (fail-closed: check `~/.ssh/known_hosts`, refuse if no entry)
+  rather than the more obvious-looking `known_hosts=None`, which actually
+  *disables* host-key verification — a real MITM exposure this codebase
+  never defaults to.
+
+**Genuine unknowns, surfaced rather than silently resolved:** two things
+about the real host wrapper can't be confirmed because it doesn't exist
+yet for this codebase to inspect — its exact command syntax (assumed to
+mirror tux2lab's own CLI, since that's the only documented syntax) and
+`vm list`/`vm info`'s output format (assumed JSON, with "not found"
+detected by a stderr-text heuristic since there's no documented distinct
+signal). Both are isolated in small, clearly-marked functions in
+`SSHTux2LabClient` specifically so they're an easy, obvious fix once a
+real host exists to test against. Worth knowing: this means
+`install_idempotent`/`remove_idempotent`'s retry-safety is fully reliable
+against `FakeTux2LabClient` today, but may not reliably detect
+"already gone" vs. "genuinely still failing" against a real host until
+that not-found signal is confirmed.
+
+**Worth knowing:** before writing any of `SSHTux2LabClient`, I checked
+`asyncssh`'s actual public API rather than working from memory —
+`connect()`'s real keyword arguments, the `known_hosts=None`
+disable-checking behavior (confirmed via the maintainer's own GitHub
+reply), `run()`/`SSHCompletedProcess`/`ProcessError`'s real attribute
+names, and `TimeoutError`'s slightly surprising class hierarchy (it's a
+distinct `asyncssh.process.TimeoutError`, not an alias for the builtin,
+though it does inherit from both). Unlike tux2lab's CLI, `asyncssh` is
+public and checkable, so there was no reason to guess at it the way the
+wrapper's syntax had to be.
+
+**Verified:** the full API surface was prototyped directly in the
+sandbox — key generation, a real local SSH server, a real client
+connection, real command execution and timeout behavior — before any of
+it went into the actual module. The test suite then runs the *same*
+lifecycle-contract test against both `FakeTux2LabClient` and
+`SSHTux2LabClient` (the latter talking to a real local `asyncssh` server
+standing in for the wrapper), so "the fake client passes the same test
+suite as the real one" is demonstrated, not just asserted. Separately
+verified: a malicious hostname/image never reaches the SSH call at all
+(checked via the fake server's received-command log, not just that an
+exception was raised), a real timeout against a real hung command raises
+the right exception type, and both idempotent-retry helpers were tested
+for both outcomes — recovering from an ambiguous failure and correctly
+propagating a genuine one.
+
 ---
 
 ## Open questions still outstanding
