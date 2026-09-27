@@ -34,6 +34,8 @@ datetime read from this DB as UTC and never attach tzinfo to it.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import (
     DDL,
     Boolean,
@@ -51,6 +53,17 @@ from sqlalchemy import (
 )
 
 from lab_orchestrator.core.state_machine import InstanceState
+
+
+def utcnow() -> datetime:
+    """Naive UTC `datetime`, matching this module's storage convention
+    (see the module docstring). Every writer of a timestamp column in
+    this codebase should use this, not `datetime.utcnow()` directly
+    (deprecated) or an aware `datetime.now(timezone.utc)` (would mix
+    aware/naive values against everything read back from the DB).
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
+
 
 metadata = MetaData()
 

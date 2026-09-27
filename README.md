@@ -57,11 +57,47 @@ uppercased, or a `.env` file in the repo root. Currently defined:
 | `LAB_ORCH_TUX2LAB_SSH_KEY_PATH` | *(none — required)* | M4/M5 |
 | `LAB_ORCH_TUX2LAB_SSH_KNOWN_HOSTS_PATH` | *(none — see note below)* | M4/M5 |
 | `LAB_ORCH_TUX2LAB_SSH_COMMAND_TIMEOUT` | `30.0` | M4/M5 |
+| `LAB_ORCH_LEASE_LIFETIME_HOURS` | `4.0` | M5 — architecture doc §7's own number, not a guess |
+| `LAB_ORCH_PROVISIONING_POLL_INTERVAL_SECONDS` | `2.0` | M5 — this module's own judgment call; not specified in the doc |
+| `LAB_ORCH_PROVISIONING_TIMEOUT_SECONDS` | `300.0` | M5 — same |
+| `LAB_ORCH_VM_SSH_USERNAME` | `labuser` | M5 — fixed convention per architecture doc §12, not machine-specific |
 
 Note the derivation is `LAB_ORCH_` + the field name uppercased, not an
 abbreviation — e.g. `machines_config_path` → `LAB_ORCH_MACHINES_CONFIG_PATH`,
 not `LAB_ORCH_MACHINES_CONFIG`. Worth double-checking against the field
 name in `core/config.py` before relying on a new one.
+
+## Instance manager / API notes
+
+- **Background tasks are tracked, not fire-and-forget.** `asyncio.
+  create_task()` only holds a *weak* reference to the task it returns —
+  without something else holding a strong reference, a task can be
+  garbage-collected mid-flight. `app.state.background_tasks` (a `set`,
+  with a `done_callback` that discards on completion) is that reference,
+  and also lets shutdown wait for whatever's still in progress rather
+  than dropping it.
+- **The 202 response reports `PROVISIONING`, not `REQUESTED`** — caught
+  by an actual test failure, not designed in from the start. The
+  `REQUESTED -> PROVISIONING` transition happens synchronously inside
+  `create_instance()`, before the row's dict is returned, specifically
+  so the API response matches architecture doc §8's example literally.
+  `provision_instance()` (the background task) picks up from
+  `PROVISIONING`, it doesn't repeat that transition.
+- **Every state change goes through `next_state()` (M3)**, never a raw
+  string assignment — an `IllegalTransition` there means a real bug in
+  this module's own call ordering, and is deliberately *not* caught
+  alongside expected failures (a bad tux2lab call, a naming.py error),
+  so a logic bug surfaces loudly instead of being mistaken for a VM
+  failure and quietly driven into `DESTROYED`.
+- **A broad `except Exception` safety net still lands the row in a
+  terminal state** before re-raising — implementation plan §3 is
+  explicit that a failed provisioning attempt should end in `FAILED`,
+  not get stuck in `PROVISIONING` forever, even for a genuinely
+  unexpected error.
+- **TCP/22 reachability lives here, not in the tux2lab adapter (M4)** —
+  tux2lab has no way to know how reachable a VM is from the orchestrator
+  container's own network position; that's this module's vantage point,
+  not the CLI wrapper's.
 
 ## Tux2Lab adapter notes
 
@@ -200,7 +236,27 @@ intentional: M0 is scaffolding only.
       server** standing in for the host wrapper, not just mocks — see
       `tests/test_tux2lab_client.py` and the "Real-host assumptions"
       note below.
-- [ ] M5 — Instance manager + REST API
+- [x] **M5 — Instance manager + REST API** *(blocked short of fully
+      done — see below)*. `instance_manager.create_instance()` (quota +
+      machine-type validation, synchronous `REQUESTED` -> `PROVISIONING`
+      transition so the `202` response already shows `PROVISIONING` per
+      architecture doc §8) and `provision_instance()` (the full async
+      driver: install -> start -> poll for readiness -> `READY`, or a
+      clean `FAILED -> CLEANUP -> DESTROYED` on any failure, every step
+      going through `core.state_machine.next_state()`). `POST`/`GET
+      /v1/instances` wired up, background tasks tracked in
+      `app.state.background_tasks` so they survive past the request that
+      created them and are drained at shutdown. **Still blocked**: the
+      done-when's literal "full curl workflow reaches READY against the
+      real app" can't run in production, because `naming.py` (question
+      #1 below) is unimplemented — every path through it is proven with
+      tests that substitute a stand-in hostname generator instead (see
+      `tests/test_api_instances.py::test_full_workflow_reaches_ready`
+      and `tests/test_instance_manager.py`), and verified for real
+      against a live server that everything *up to* that block behaves
+      correctly (`202`/`404`/`400`/`409` all confirmed by hand, plus the
+      failure path landing cleanly in `DESTROYED` with a clear
+      `failure_reason`).
 - [ ] M6 — Janitor
 - [ ] M7 — Startup reconciliation
 - [ ] M8 — Guacamole JSON-auth adapter *(deferred)*
@@ -208,18 +264,20 @@ intentional: M0 is scaffolding only.
 
 ## Open questions carried over from the design docs
 
-These are flagged in the architecture doc and **not yet decided** — don't
-let an implementation detail silently answer them:
-
-1. **DNS suffix in the VM hostname** (architecture doc §5, §14.5). Does
-   `lab-m01-aurora-7k4m2.hermann.internal` legitimately reintroduce the
-   username via tux2lab's DNS zoning, or does that conflict with the
-   "opaque, no-username" hostname goal? Must be answered before `naming.py`
-   (M5) is written.
-2. **`POST` on an existing active instance** (§14.6): reject outright, or
-   return the existing instance? Decide during M5 API design.
-3. **List/delete endpoints** (§14.7, §8): is `GET /v1/instances` (list) or
-   `DELETE /v1/instances/{id}` in scope for v1? Decide during M5.
+1. **DNS suffix in the VM hostname** (architecture doc §5, §14.5) — the
+   one real blocker left. Does `lab-m01-aurora-7k4m2.hermann.internal`
+   legitimately reintroduce the username via tux2lab's DNS zoning, or
+   does that conflict with the "opaque, no-username" hostname goal?
+   `naming.py` is written and has a real interface
+   (`generate_hostname(machine) -> str`) that the rest of M5 already
+   calls correctly — it just raises `NotImplementedError` until this is
+   answered. Nothing else in M5 needs to change once it is.
+2. ~~`POST` on an existing active instance~~ — **decided in M5**:
+   rejected outright (`409`), not returned as the existing instance. See
+   `api/routes_instances.py`'s module docstring for the reasoning.
+3. ~~List/delete endpoints~~ — **decided in M5**: out of scope for this
+   milestone, left for whoever picks up that question next (not silently
+   assumed unnecessary — just not part of M5's own done-when).
 
 A few other risks are tracked as concrete "done when" test requirements
 rather than open questions — see implementation plan §M2 (quota race) and

@@ -34,6 +34,12 @@ def create_db_engine(db_path: Path | str) -> Engine:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys = ON")
         cursor.execute("PRAGMA journal_mode = WAL")
+        # M5 introduces genuinely concurrent writers (multiple background
+        # provisioning tasks updating different rows at once) for the
+        # first time; without this, a writer that loses the race for
+        # SQLite's single-writer lock fails immediately with "database is
+        # locked" instead of waiting briefly for its turn.
+        cursor.execute("PRAGMA busy_timeout = 5000")
         cursor.close()
 
     return engine

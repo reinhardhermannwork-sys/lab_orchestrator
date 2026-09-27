@@ -1,7 +1,9 @@
 # Lab Orchestrator — Progress Log
 
-**Status as of this writing:** M0–M3 complete (of M0–M9). 61 tests passing,
-`ruff` clean, four commits. Next up: M4 (Tux2Lab adapter).
+**Status as of this writing:** M0–M5 complete (of M0–M9), M5 blocked
+short of fully done pending one open question. 99 tests passing, `ruff`
+clean. Next up: M6 (janitor), or resolving M5's blocker so it can be
+closed out first.
 
 This is a narrative log, not reference docs — see `README.md` for setup
 instructions and current project state. This file exists to answer "what
@@ -197,24 +199,93 @@ the right exception type, and both idempotent-retry helpers were tested
 for both outcomes — recovering from an ambiguous failure and correctly
 propagating a genuine one.
 
+## M5 — Instance manager + REST API (blocked short of fully done)
+
+`instance_manager.create_instance()` (fast, synchronous: validate,
+quota-check via M2's DB constraints, insert) and `provision_instance()`
+(the full async driver, kicked off as a tracked background task —
+install → start → poll for readiness → `READY`, or a clean
+`FAILED → CLEANUP → DESTROYED` on any failure, every transition going
+through M3's `next_state()`). `POST`/`GET /v1/instances` wired up
+end-to-end.
+
+**Real bugs caught by actually running the tests, not just writing
+them** — worth naming both, since neither was something a design review
+would have caught:
+
+1. The `202` response initially showed `state: "REQUESTED"`. Architecture
+   doc §8's example is explicit that it should already show
+   `"PROVISIONING"`. First test run failed on exactly this, correctly.
+   Fixed by moving the `REQUESTED -> PROVISIONING` transition into
+   `create_instance()` itself, synchronous, before the response is
+   built — `provision_instance()` no longer repeats it.
+2. The first API integration test file quietly shared the real
+   `orchestrator.db` file across every test in it (the `fast_settings`
+   fixture set poll-interval/timeout env vars but never overrode
+   `LAB_ORCH_DB_PATH`), so instances created by one test looked "still
+   active" to the next one. Surfaced as two tests failing with an
+   unexpected `409` instead of `202`. Fixed by giving the fixture its
+   own `tmp_path`-based DB, matching the pattern already used everywhere
+   else.
+
+**Judgment calls:**
+- **Two of the three open API-design questions (§14.6, §14.7) are
+  decided, not deferred further**: `POST` while a user already has an
+  active instance is rejected (`409`), not treated as "return the
+  existing one" — the DB constraint already makes rejection the natural
+  behavior, and a v1 prototype has no stated need for the extra lookup
+  the alternative would require. List/delete endpoints are out of scope
+  for this milestone — not built, not silently assumed unneeded either.
+- **The third (§5, DNS-suffix in the hostname) is the one real blocker**,
+  per the implementation plan's own explicit instruction not to guess at
+  it. `naming.py` has a real, importable interface
+  (`generate_hostname(machine) -> str`) that the rest of M5 already
+  calls correctly through — it just raises `NotImplementedError` in
+  production until this is answered. Every other path through M5 is
+  fully built, tested, and verified; only this one function's body is
+  missing.
+- TCP/22 reachability lives in `instance_manager.py`, not the M4
+  adapter — tux2lab itself has no way to know how reachable a VM is from
+  the orchestrator's own network position.
+
+**Verified:**
+- Every test in `tests/test_instance_manager.py` and
+  `tests/test_api_instances.py` that needs provisioning to actually
+  reach `READY` substitutes a stand-in hostname generator via
+  `monkeypatch.setattr(naming, "generate_hostname", ...)` (patching the
+  module attribute, not a rebound import — matters, since
+  `instance_manager.py` calls it as `naming.generate_hostname(...)` at
+  call time specifically so this works) and a stand-in TCP check
+  (`FakeTux2LabClient`'s fixed fake IP isn't actually reachable from this
+  sandbox). `test_full_workflow_reaches_ready` reproduces architecture
+  doc §8's curl workflow against the real app end-to-end this way — the
+  literal M5 done-when, minus the one blocked piece.
+- Separately, against a real running server with the *actual*,
+  still-blocked `naming.py`: `POST` returns `202`, the background task
+  correctly fails at the hostname-generation step, and the row lands
+  cleanly in `DESTROYED` with the real `NotImplementedError` message
+  recorded as `failure_reason` — confirmed both via the API's own `GET`
+  response and by reading the SQLite file directly. Also manually
+  confirmed the `404` (unknown machine type, unknown instance id) and
+  `400` (disabled machine) paths against a live server.
+- The timing-sensitive new tests (polling loops, a short readiness
+  timeout) were re-run 8x before considering them reliable, following
+  the same discipline as M2's concurrency tests.
+
 ---
 
 ## Open questions still outstanding
 
-Carried forward from the architecture doc, not yet resolved by anyone:
-
-1. **DNS suffix in the VM hostname** (architecture doc §5, §14.5) — does
-   `lab-m01-aurora-7k4m2.hermann.internal` legitimately reintroduce the
-   username via tux2lab's DNS zoning, or does that conflict with the
-   "opaque, no-username" hostname goal? **This blocks `naming.py`**, which
-   is needed by M5 — worth settling before M5 starts, even though M4
-   itself doesn't need it.
-2. **`POST` on an existing active instance** (§14.6) — reject outright, or
-   return the existing instance? Needed for M5's API design.
-3. **List/delete endpoints** (§14.7, §8) — is `GET /v1/instances` (list)
-   or `DELETE /v1/instances/{id}` in scope for v1? Also needed for M5.
-
-None of these block M4 (the Tux2Lab adapter), which is next.
+1. **DNS suffix in the VM hostname** (architecture doc §5, §14.5) — the
+   one still open. Does `lab-m01-aurora-7k4m2.hermann.internal`
+   legitimately reintroduce the username via tux2lab's DNS zoning, or
+   does that conflict with the "opaque, no-username" hostname goal?
+   **This is the active blocker on `naming.py`**, which everything else
+   in M5 is already wired up and waiting on.
+2. ~~`POST` on an existing active instance~~ — decided in M5 (rejected,
+   `409`).
+3. ~~List/delete endpoints~~ — decided in M5 (out of scope for this
+   milestone).
 
 ## How verification has worked so far
 

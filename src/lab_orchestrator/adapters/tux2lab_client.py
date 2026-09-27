@@ -192,6 +192,13 @@ class Tux2LabClient(ABC):
     @abstractmethod
     async def _do_remove(self, hostname: str) -> None: ...
 
+    async def close(self) -> None:
+        """Release any held resources (e.g. an SSH connection). Safe
+        no-op by default — only `SSHTux2LabClient` actually holds
+        anything to close. Lets main.py call this uniformly at shutdown
+        regardless of which concrete client is wired in.
+        """
+
     async def install_idempotent(self, hostname: str, image: str) -> None:
         """Like `install()`, but safe to call again after a prior attempt
         whose outcome is unknown. See the module docstring and

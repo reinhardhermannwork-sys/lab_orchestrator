@@ -60,6 +60,21 @@ class Settings(BaseSettings):
     # that distinction matters and how it's preserved.
     tux2lab_ssh_command_timeout: float = 30.0
 
+    # Consumed starting M5. Max lease lifetime is architecture doc §7's own
+    # number (4 hours), not a guess. The poll interval/timeout aren't
+    # specified anywhere in the doc — this module's own judgment call on a
+    # reasonable default for how long to wait for a VM to report healthy
+    # before treating provisioning as failed.
+    lease_lifetime_hours: float = 4.0
+    provisioning_poll_interval_seconds: float = 2.0
+    provisioning_timeout_seconds: float = 300.0
+
+    # Every VM uses labuser@<vm> (architecture doc §12) -- a fixed,
+    # spec-given convention across the whole system, not machine-specific.
+    # Configurable here rather than hardcoded in routes_instances.py per
+    # the "never hardcode a path/value elsewhere" ground rule.
+    vm_ssh_username: str = "labuser"
+
 
 @lru_cache
 def get_settings() -> Settings:
