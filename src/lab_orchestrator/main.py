@@ -24,6 +24,7 @@ from lab_orchestrator.adapters.tux2lab_client import FakeTux2LabClient, SSHTux2L
 from lab_orchestrator.api.routes_instances import router as instances_router
 from lab_orchestrator.core.config import get_settings, load_machine_definitions
 from lab_orchestrator.db.database import get_engine
+from lab_orchestrator.core.janitor import janitor_loop
 from lab_orchestrator.db.init_db import init_db, sync_machine_definitions
 
 logger = logging.getLogger(__name__)
@@ -65,11 +66,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.include_router(instances_router, prefix="/v1")
 
+    janitor_task = asyncio.create_task(
+        janitor_loop(
+            engine=app.state.db_engine,
+            tux2lab=app.state.tux2lab,
+            settings=app.state.settings,
+        )
+    )
+    app.state.background_tasks.add(janitor_task)
+    janitor_task.add_done_callback(app.state.background_tasks.discard)
+
     # (M7) reconcile_on_startup()
-    # (M6) janitor_task = asyncio.create_task(janitor_loop())
     yield
     # --- shutdown ---
-    # (M6) janitor_task.cancel()
     for task in list(app.state.background_tasks):
         task.cancel()
     await asyncio.gather(*app.state.background_tasks, return_exceptions=True)

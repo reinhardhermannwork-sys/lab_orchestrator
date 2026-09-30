@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     lease_lifetime_hours: float = 4.0
     provisioning_poll_interval_seconds: float = 2.0
     provisioning_timeout_seconds: float = 300.0
+    janitor_poll_interval_seconds: float = 15.0
+    disconnect_grace_seconds: float = 300.0
 
     # Every VM uses labuser@<vm> (architecture doc §12) -- a fixed,
     # spec-given convention across the whole system, not machine-specific.
