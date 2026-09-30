@@ -1,9 +1,7 @@
 # Lab Orchestrator — Progress Log
 
-**Status as of this writing:** M0–M5 complete (of M0–M9), M5 blocked
-short of fully done pending one open question. 99 tests passing, `ruff`
-clean. Next up: M6 (janitor), or resolving M5's blocker so it can be
-closed out first.
+**Status as of this writing:** M0–M5 complete (of M0–M9). 104 tests
+passing, `ruff` clean. Next up: M6 (janitor).
 
 This is a narrative log, not reference docs — see `README.md` for setup
 instructions and current project state. This file exists to answer "what
@@ -199,7 +197,7 @@ the right exception type, and both idempotent-retry helpers were tested
 for both outcomes — recovering from an ambiguous failure and correctly
 propagating a genuine one.
 
-## M5 — Instance manager + REST API (blocked short of fully done)
+## M5 — Instance manager + REST API
 
 `instance_manager.create_instance()` (fast, synchronous: validate,
 quota-check via M2's DB constraints, insert) and `provision_instance()`
@@ -274,18 +272,39 @@ would have caught:
 
 ---
 
+## M5 close-out — hostname decision and `naming.py`
+
+The one blocker on M5 (architecture doc §5) was answered by the human:
+**there is no purpose in including the username**, so hostnames are opaque
+and the orchestrator neither builds nor stores a `.{username}.internal`
+suffix. `naming.generate_hostname(machine)` produces
+`lab-<code>-<codename>-<5 chars of lowercase Crockford base32>` using
+`secrets.choice`, and takes no user input, so it can't leak a username by
+construction.
+
+**Consequences:**
+- The stand-in hostname generator that M5's tests used is no longer needed
+  for the end-to-end paths: `test_full_workflow_reaches_ready` and a new
+  instance-manager test now run against the real generator. Only the
+  TCP/22 check is still stubbed.
+- The "naming still blocked fails cleanly" test and the matching
+  `except NotImplementedError` branch were removed as dead code. The broad
+  `except Exception` safety net still covers unexpected failures.
+- Architecture doc §5/§8/§13/§14.5/§15 and the implementation plan's v1
+  definition-of-done were updated to record the decision.
+
+**Still unverified:** whether the short label resolves from a client's
+network, or whether users should connect via the `ip` field. That depends
+on tux2lab's DNS behavior and needs a real host to confirm.
+
+**Verified:** `pytest` (104 passed) and `ruff` clean.
+
+---
+
 ## Open questions still outstanding
 
-1. **DNS suffix in the VM hostname** (architecture doc §5, §14.5) — the
-   one still open. Does `lab-m01-aurora-7k4m2.hermann.internal`
-   legitimately reintroduce the username via tux2lab's DNS zoning, or
-   does that conflict with the "opaque, no-username" hostname goal?
-   **This is the active blocker on `naming.py`**, which everything else
-   in M5 is already wired up and waiting on.
-2. ~~`POST` on an existing active instance~~ — decided in M5 (rejected,
-   `409`).
-3. ~~List/delete endpoints~~ — decided in M5 (out of scope for this
-   milestone).
+None blocking. The open item above (short-label resolvability) needs a real
+tux2lab host.
 
 ## How verification has worked so far
 

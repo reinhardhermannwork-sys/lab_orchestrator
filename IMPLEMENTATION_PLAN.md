@@ -130,6 +130,6 @@ Work through these roughly in order. Each has a goal, what to build, and how to 
 - [ ] 4h max lifetime and 5m disconnect-grace-adjacent cleanup logic work (disconnect-grace itself needs Guacamole, so for v1 this may only be testable via the max-lifetime path — note this gap rather than skipping the test silently).
 - [ ] Startup reconciliation runs and surfaces drift.
 - [ ] SSH private key never appears in an API response, log, or DB row — verified by grepping test output/logs, not just by code review.
-- [ ] The DNS-suffix / hostname question (architecture doc §5) has an explicit answer on record, not an assumption baked into `naming.py`.
+- [x] The DNS-suffix / hostname question (architecture doc §5) has an explicit answer on record: opaque name, no username, no orchestrator-built suffix.
 
 Guacamole (M8/M9) is **out of scope for "v1 done"** — it's the deliberately deferred next phase once the above is solid.

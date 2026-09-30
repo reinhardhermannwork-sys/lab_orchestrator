@@ -195,12 +195,11 @@ src/lab_orchestrator/
 │   ├── tux2lab_client.py    # SSH/subprocess adapter to the CLI
 │   └── guacamole_client.py  # JSON-auth token builder (deferred)
 ├── janitor.py                # async background cleanup loop
-└── naming.py                 # hostname generation
+└── naming.py                 # opaque hostname generation
 ```
 
-Every non-`main.py` module above is currently a stub — a docstring
-describing its scope and which milestone fills it in, nothing more. That's
-intentional: M0 is scaffolding only.
+Modules for milestones not yet built (`janitor.py`, `adapters/guacamole_client.py`)
+are still stubs — a docstring describing scope and which milestone fills them in.
 
 ## Milestone status
 
@@ -236,44 +235,35 @@ intentional: M0 is scaffolding only.
       server** standing in for the host wrapper, not just mocks — see
       `tests/test_tux2lab_client.py` and the "Real-host assumptions"
       note below.
-- [x] **M5 — Instance manager + REST API** *(blocked short of fully
-      done — see below)*. `instance_manager.create_instance()` (quota +
-      machine-type validation, synchronous `REQUESTED` -> `PROVISIONING`
-      transition so the `202` response already shows `PROVISIONING` per
-      architecture doc §8) and `provision_instance()` (the full async
-      driver: install -> start -> poll for readiness -> `READY`, or a
-      clean `FAILED -> CLEANUP -> DESTROYED` on any failure, every step
-      going through `core.state_machine.next_state()`). `POST`/`GET
-      /v1/instances` wired up, background tasks tracked in
+- [x] **M5 — Instance manager + REST API.** `instance_manager.create_instance()`
+      (quota + machine-type validation, synchronous `REQUESTED` ->
+      `PROVISIONING` transition so the `202` response already shows
+      `PROVISIONING` per architecture doc §8) and `provision_instance()`
+      (the full async driver: install -> start -> poll for readiness ->
+      `READY`, or a clean `FAILED -> CLEANUP -> DESTROYED` on any failure,
+      every step going through `core.state_machine.next_state()`).
+      `POST`/`GET /v1/instances` wired up, background tasks tracked in
       `app.state.background_tasks` so they survive past the request that
-      created them and are drained at shutdown. **Still blocked**: the
-      done-when's literal "full curl workflow reaches READY against the
-      real app" can't run in production, because `naming.py` (question
-      #1 below) is unimplemented — every path through it is proven with
-      tests that substitute a stand-in hostname generator instead (see
-      `tests/test_api_instances.py::test_full_workflow_reaches_ready`
-      and `tests/test_instance_manager.py`), and verified for real
-      against a live server that everything *up to* that block behaves
-      correctly (`202`/`404`/`400`/`409` all confirmed by hand, plus the
-      failure path landing cleanly in `DESTROYED` with a clear
-      `failure_reason`).
+      created them and are drained at shutdown. `naming.py` generates
+      opaque, username-free hostnames (see "Decisions" below). The full
+      workflow test (`tests/test_api_instances.py::test_full_workflow_reaches_ready`)
+      runs the real app and real naming; only the TCP/22 check is stubbed,
+      since the fake client's IP isn't reachable from a sandbox.
 - [ ] M6 — Janitor
 - [ ] M7 — Startup reconciliation
 - [ ] M8 — Guacamole JSON-auth adapter *(deferred)*
 - [ ] M9 — Guacamole tunnel-close listener *(deferred, separate Java project)*
 
-## Open questions carried over from the design docs
+## Decisions carried over from the design docs
 
-1. **DNS suffix in the VM hostname** (architecture doc §5, §14.5) — the
-   one real blocker left. Does `lab-m01-aurora-7k4m2.hermann.internal`
-   legitimately reintroduce the username via tux2lab's DNS zoning, or
-   does that conflict with the "opaque, no-username" hostname goal?
-   `naming.py` is written and has a real interface
-   (`generate_hostname(machine) -> str`) that the rest of M5 already
-   calls correctly — it just raises `NotImplementedError` until this is
-   answered. Nothing else in M5 needs to change once it is.
-2. ~~`POST` on an existing active instance~~ — **decided in M5**:
-   rejected outright (`409`), not returned as the existing instance. See
+1. ~~DNS suffix in the VM hostname~~ (architecture doc §5, §14.5) — **decided**:
+   VM hostnames are opaque (`lab-m01-aurora-7k4m2`), with no username and no
+   orchestrator-built DNS suffix. If tux2lab's DNS zoning appends one, that's
+   tux2lab's concern. *Still unverified against a real host:* whether the
+   short label resolves from the client's network, or whether users should
+   connect via the `ip` in the `GET` response.
+2. ~~`POST` on an existing active instance~~ — **decided in M5**: rejected
+   outright (`409`), not returned as the existing instance. See
    `api/routes_instances.py`'s module docstring for the reasoning.
 3. ~~List/delete endpoints~~ — **decided in M5**: out of scope for this
    milestone, left for whoever picks up that question next (not silently

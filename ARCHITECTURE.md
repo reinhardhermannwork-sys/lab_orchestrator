@@ -101,62 +101,9 @@ Example: `lab-m01-aurora-7k4m2`
 - `instance-suffix` is a short random/Crockford-base32-style identifier so recycled or simultaneous instances never collide.
 - The identifier is intentionally **opaque** — no username in the VM's own hostname component.
 
-**⚠️ Open point to confirm:** one example in the source discussion used the full form `lab-m01-aurora-7k4m2.hermann.internal` — i.e. the username reappears in the DNS suffix, even though the stated goal was to keep the username out of the hostname entirely. This may be fine if `.{username}.internal` is simply how `tux2lab`'s per-user DNS zoning works (it owns DNS/DHCP), but it wasn't explicitly reconciled with the "no username in hostname" preference. **Decide and document this explicitly before implementing `naming.py`.**
+**Decision (resolved):** the username never appears in the VM name, and the orchestrator does not build or store a `.{username}.internal` suffix. `naming.py` generates only the short opaque label above and takes no user input. If `tux2lab`'s own DNS zoning appends a suffix, that is `tux2lab`'s concern and outside the orchestrator's contract. (Not yet verified against a real host: whether the short label resolves from the client's network, or whether the IP in the `GET` response is what users should connect to.)
 
-## 6. Lifecycle state machine
-
-```
-REQUESTED
-    │
-    ▼
-PROVISIONING        (tux2lab vm install)
-    │
-    ▼
-STARTING
-    │
-    ▼
-WAITING_READY        ├── VM_STATE == running
-    │                ├── OS_STATE == healthy
-    │                └── TCP/22 reachable
-    ▼
-READY
-    │
-    ▼
-CONNECTED            (Guacamole tunnel open)
-    │
-    ├── reconnect ──────────────┐
-    │                           │
-    disconnect                  │
-    │                           │
-    ▼                           │
-DISCONNECTED_GRACE (5 min)      │
-    │                           │
-    ▼                           │
-DESTROYING ◀── expires_at reached (4h hard cap, from any state)
-    │
-    ▼
-DESTROYED
-
-Failure branch (from any state):
-FAILED → CLEANUP → DESTROYED
-```
-
-Readiness is **stricter than "VM running"**:
-
-```
-READY = VM_STATE == running
-        AND OS_STATE == healthy
-        AND TCP/22 reachable
-```
-
-No full SSH login is needed for the readiness probe — a lightweight TCP/22 check is enough. `tux2lab vm list` / `vm info` / `vm validate` supply `VM_STATE`/`OS_STATE`.
-
-The `FAILED → CLEANUP → DESTROYED` branch should exist in the state model from day one even though v1 doesn't need sophisticated recovery logic — it just needs to be a reachable state, not bolted on later.
-
-## 7. Timers & cleanup policy (v1)
-
-| Timer | Value | Status in v1 |
-|---|---|---|
+---|---|---|
 | Max lifetime | 4 hours | **Implemented** |
 | Disconnect grace | 5 minutes | **Implemented** |
 | Idle timeout | 30 minutes | **Deferred** to next iteration |
@@ -211,7 +158,7 @@ GET /v1/instances/{instance_id}
   "machine_type": "machine_1",
   "machine_name": "Machine 1",
   "state": "READY",
-  "hostname": "lab-m01-aurora-7k4m2.hermann.internal",
+  "hostname": "lab-m01-aurora-7k4m2",
   "ip": "10.28.28.42",
   "ssh": {
     "username": "labuser",
@@ -228,7 +175,7 @@ curl -X POST http://orchestrator:8000/v1/instances \
 
 curl http://orchestrator:8000/v1/instances/01K...
 
-ssh -i /path/to/lab-private-key labuser@lab-m01-aurora-7k4m2.hermann.internal
+ssh -i /path/to/lab-private-key labuser@lab-m01-aurora-7k4m2   # or labuser@<ip>
 ```
 
 Once Guacamole is integrated, the `READY` response drops raw SSH details in favor of:
@@ -369,7 +316,7 @@ The private key must **never** appear in: curl responses, the frontend, the data
     "Machine 1 — Aurora": {
       "protocol": "ssh",
       "parameters": {
-        "hostname": "lab-m01-aurora-7k4m2.hermann.internal",
+        "hostname": "lab-m01-aurora-7k4m2",
         "port": "22",
         "username": "labuser",
         "private-key": "..."
@@ -400,7 +347,7 @@ These should be explicit decisions before/while implementing, not discovered mid
 2. **Restart reconciliation.** State surviving a restart (via SQLite) is not the same as state being *correct* after a restart. If the orchestrator dies mid-`vm install`, nothing currently reconciles the DB against `tux2lab vm list` on startup. Recommend an explicit reconciliation step at boot.
 3. **Host-wrapper input validation.** The SSH-based host wrapper is a deliberate privilege boundary; hostnames/params crossing it need strict validation (e.g. a tight allowed-charset regex) to avoid command injection, since this is exactly the kind of boundary that's easy to under-specify.
 4. **CLI call idempotency.** If a `tux2lab vm install` call times out on the orchestrator side without a definitive success/failure signal, a naive retry could double-provision. The adapter should check `vm info`/`vm list` before retrying a mutating call.
-5. **Hostname/DNS-suffix inconsistency** — see §5. Confirm whether `.{username}.internal` in the FQDN conflicts with the "opaque, no-username" hostname goal, or is an accepted `tux2lab` DNS-zoning convention.
+5. ~~**Hostname/DNS-suffix inconsistency**~~ — **resolved**, see §5: no username in the hostname, no orchestrator-built DNS suffix.
 6. **`POST` on existing active instance** — rejected outright, or returns the existing instance? Stated informally as "rejected or return the existing instance" without a final call.
 7. **List/delete endpoints** — not explicitly specified (see §8).
 
@@ -413,6 +360,7 @@ These should be explicit decisions before/while implementing, not discovered mid
 - [x] Host-side restricted CLI bridge (SSH, allowlisted commands) for that container
 - [x] Separate copy of the shared SSH key, read-only mount, never exposed to API/DB/logs/frontend
 - [x] `labuser` is the VM account
+- [x] VM hostnames are opaque: no username, no orchestrator-built DNS suffix (§5)
 - [x] Asynchronous API: `POST` → `instance_id` → `GET` for status
 - [x] SQLite, two tables (`machine_definitions`, `instances`)
 - [x] No Redis/Celery/RabbitMQ/Kubernetes — single process + async janitor loop
