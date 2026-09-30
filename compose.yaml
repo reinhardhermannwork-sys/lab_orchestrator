@@ -1,0 +1,43 @@
+# Lab orchestrator on the VPS (M8, architecture doc §17).
+#
+#   cp deploy/.env.example deploy/.env   # then edit
+#   docker compose --env-file deploy/.env up -d --build
+#
+# No published port and no traefik labels: the API is reachable only by
+# containers on the shared lab network (the web frontend).
+
+name: lab-orchestrator
+
+services:
+  lab-orchestrator:
+    build: .
+    image: lab-orchestrator:${LAB_ORCH_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    # SIGTERM lets the lifespan cancel provisioning tasks and close the
+    # SSH connection; startup reconciliation cleans up what was in flight.
+    stop_grace_period: 30s
+    env_file:
+      - deploy/.env
+    environment:
+      # Container-side paths, fixed to match the mounts below.
+      LAB_ORCH_DB_PATH: /data/orchestrator.db
+      LAB_ORCH_MACHINES_CONFIG_PATH: /etc/lab-orchestrator/machines.yaml
+      LAB_ORCH_TUX2LAB_SSH_KEY_PATH: /run/secrets/lab-orchestrator/tux2lab_ssh_key
+      LAB_ORCH_TUX2LAB_SSH_KNOWN_HOSTS_PATH: /run/secrets/lab-orchestrator/known_hosts
+    volumes:
+      - orchestrator-data:/data
+      - ${LAB_ORCH_HOST_MACHINES_CONFIG:-./config/machines.yaml}:/etc/lab-orchestrator/machines.yaml:ro
+      - ${LAB_ORCH_HOST_SECRETS_DIR:-./deploy/secrets}:/run/secrets/lab-orchestrator:ro
+    extra_hosts:
+      # The host's sshd, where the restricted tux2lab wrapper lives.
+      - "host.docker.internal:host-gateway"
+    networks:
+      - lab
+
+volumes:
+  orchestrator-data:
+
+networks:
+  lab:
+    external: true
+    name: ${LAB_NETWORK:?set LAB_NETWORK to the shared container network in deploy/.env}

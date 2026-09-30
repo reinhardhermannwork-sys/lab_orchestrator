@@ -10,20 +10,26 @@ since has hooked into `lifespan` without changing this file's shape:
   - M6: start the janitor background task
   - M7: run startup reconciliation against `tux2lab vm list`, before
     the janitor starts
+  - M8: log to stdout, pick the tux2lab backend explicitly
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from lab_orchestrator.adapters.tux2lab_client import FakeTux2LabClient, SSHTux2LabClient
+from lab_orchestrator.adapters.tux2lab_client import (
+    FakeTux2LabClient,
+    SSHTux2LabClient,
+    Tux2LabClient,
+)
 from lab_orchestrator.api.routes_instances import router as instances_router
-from lab_orchestrator.core.config import get_settings, load_machine_definitions
+from lab_orchestrator.core.config import Settings, get_settings, load_machine_definitions
 from lab_orchestrator.core.janitor import janitor_loop
 from lab_orchestrator.core.reconcile import reconcile_on_startup
 from lab_orchestrator.db.database import get_engine
@@ -31,11 +37,56 @@ from lab_orchestrator.db.init_db import init_db, sync_machine_definitions
 
 logger = logging.getLogger(__name__)
 
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def configure_logging(level: str) -> None:
+    """Send lab_orchestrator.* logs to stdout at `level`.
+
+    uvicorn only configures its own loggers, so without this only WARNING
+    and above from this package reached stderr (Python's last-resort
+    handler) and every INFO line -- janitor, reconciliation -- was lost.
+    Only the package logger is touched, never the root logger, and it
+    keeps propagating so pytest's caplog still sees records. Idempotent:
+    the lifespan runs once per app, and tests build many apps.
+    """
+    package_logger = logging.getLogger("lab_orchestrator")
+    package_logger.setLevel(level)
+    if not any(getattr(h, "_lab_orchestrator", False) for h in package_logger.handlers):
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+        handler._lab_orchestrator = True  # type: ignore[attr-defined]
+        package_logger.addHandler(handler)
+
+
+def make_tux2lab_client(settings: Settings) -> Tux2LabClient:
+    """Pick the Tux2LabClient named by `settings.tux2lab_backend`.
+
+    "ssh" raises ValueError (failing startup) if the SSH settings are
+    missing. "auto" falls back to the fake client with a loud warning,
+    which is fine for local dev and wrong for a deployment -- a deployment
+    sets the backend explicitly (M8).
+    """
+    if settings.tux2lab_backend == "fake":
+        logger.warning("using FakeTux2LabClient (LAB_ORCH_TUX2LAB_BACKEND=fake) -- no real VMs")
+        return FakeTux2LabClient()
+    if settings.tux2lab_backend == "ssh":
+        return SSHTux2LabClient.from_settings(settings)
+    try:
+        return SSHTux2LabClient.from_settings(settings)
+    except ValueError:
+        logger.warning(
+            "tux2lab SSH settings not configured (LAB_ORCH_TUX2LAB_SSH_*) — "
+            "using FakeTux2LabClient. Fine for local dev, wrong for production."
+        )
+        return FakeTux2LabClient()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # --- startup ---
     settings = get_settings()
+    configure_logging(settings.log_level)
     app.state.settings = settings
     # Raises MachineConfigError on invalid config — deliberately
     # unhandled here so startup fails fast and loud (M1 done-when).
@@ -46,18 +97,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     sync_machine_definitions(engine, app.state.machines)
     app.state.db_engine = engine
 
-    # Real client if the host-wrapper SSH settings are actually
-    # configured, fake otherwise. Falling back silently would make a
-    # misconfigured production deployment look like it's working while
-    # quietly never touching a real VM, so this logs loudly instead.
-    try:
-        app.state.tux2lab = SSHTux2LabClient.from_settings(settings)
-    except ValueError:
-        logger.warning(
-            "tux2lab SSH settings not configured (LAB_ORCH_TUX2LAB_SSH_*) — "
-            "using FakeTux2LabClient. Fine for local dev, wrong for production."
-        )
-        app.state.tux2lab = FakeTux2LabClient()
+    # Raises ValueError for backend "ssh" without SSH settings --
+    # deliberately unhandled, like the config error above.
+    app.state.tux2lab = make_tux2lab_client(settings)
 
     # Provisioning tasks (api/routes_instances.py) are tracked here so a
     # task object always has a strong referent — asyncio only holds a

@@ -42,6 +42,26 @@ Run tests:
 pytest
 ```
 
+## Deployment (container)
+
+On the VPS the orchestrator runs as a container on the shared lab network
+(architecture doc §17). It has no published port; only containers on that
+network (the web frontend) can reach it.
+
+```bash
+cp deploy/.env.example deploy/.env      # set LAB_NETWORK, backend, paths
+docker compose --env-file deploy/.env up -d --build
+docker compose --env-file deploy/.env logs -f
+```
+
+- `LAB_ORCH_TUX2LAB_BACKEND=fake` for stage 1 (M8), `ssh` for stage 2
+  (M9, needs the host wrapper from `deploy/host/`).
+- SQLite lives in the `orchestrator-data` volume at `/data`; it survives
+  `docker compose down`/`up` (only `down -v` deletes it).
+- Exactly one uvicorn worker. Don't scale the service or add `--workers`.
+- To call the API by hand from another container on the network:
+  `docker run --rm --network <LAB_NETWORK> curlimages/curl -s http://lab-orchestrator:8000/healthz`.
+
 ## Configuration
 
 Settings (`core/config.py`) are env-var driven — `LAB_ORCH_<FIELD_NAME>`,
@@ -62,6 +82,8 @@ uppercased, or a `.env` file in the repo root. Currently defined:
 | `LAB_ORCH_PROVISIONING_POLL_INTERVAL_SECONDS` | `2.0` | M5 — this module's own judgment call; not specified in the doc |
 | `LAB_ORCH_PROVISIONING_TIMEOUT_SECONDS` | `300.0` | M5 — same |
 | `LAB_ORCH_VM_SSH_USERNAME` | `labuser` | M5 — fixed convention per architecture doc §12, not machine-specific |
+| `LAB_ORCH_TUX2LAB_BACKEND` | `auto` | M8 — `auto` (real client if SSH settings exist, else fake with a warning), `fake`, or `ssh` (startup fails without SSH settings) |
+| `LAB_ORCH_LOG_LEVEL` | `INFO` | M8 — `DEBUG`/`INFO`/`WARNING`/`ERROR` for `lab_orchestrator.*`, written to stdout |
 | `LAB_ORCH_JANITOR_POLL_INTERVAL_SECONDS` | `15.0` | M6 — within architecture doc §7's "every 10–15 seconds" |
 | `LAB_ORCH_DISCONNECT_GRACE_SECONDS` | `300.0` | M6 — architecture doc §7's 5-minute grace |
 
@@ -278,7 +300,14 @@ scope and which milestone fills it in.
       interrupted install can be matched to its lease. Verified by
       `kill -9` of a real `uvicorn` mid-provisioning, then restart (see
       `tests/test_reconcile.py` and `PROGRESS.md`, M7).
-- [ ] M8 — Container packaging & stage-1 test deploy (fake tux2lab)
+- [ ] **M8 — Container packaging & stage-1 test deploy (fake tux2lab).**
+      *Implemented, not yet verified on the VPS.* `Dockerfile`,
+      `compose.yaml`, `deploy/.env.example`; logging to stdout
+      (`LAB_ORCH_LOG_LEVEL`); explicit `LAB_ORCH_TUX2LAB_BACKEND`. Checked
+      locally by installing the package non-editably and booting it the
+      way the image does (Docker isn't available on the dev VM). The
+      done-when checklist in `IMPLEMENTATION_PLAN.md` M8 still has to run
+      on the VPS.
 - [ ] M9 — Host wrapper & real tux2lab integration
 - [ ] M10 — Guacamole JSON-auth adapter
 - [ ] M11 — Guacamole tunnel-close listener *(separate Java project)*

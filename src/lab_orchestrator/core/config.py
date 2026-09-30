@@ -60,6 +60,17 @@ class Settings(BaseSettings):
     # that distinction matters and how it's preserved.
     tux2lab_ssh_command_timeout: float = 30.0
 
+    # Which Tux2LabClient main.py wires in (M8). "auto" keeps the local-dev
+    # behavior: the real client if the SSH settings above are set, otherwise
+    # the fake one with a warning. A deployment names its backend
+    # explicitly, so "ssh" with missing settings fails startup instead of
+    # quietly running against a fake.
+    tux2lab_backend: Literal["auto", "fake", "ssh"] = "auto"
+
+    # Level for the lab_orchestrator.* loggers, written to stdout (M8) so
+    # they show up in `docker logs`.
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+
     # Consumed starting M5. Max lease lifetime is architecture doc §7's own
     # number (4 hours), not a guess. The poll interval/timeout aren't
     # specified anywhere in the doc — this module's own judgment call on a

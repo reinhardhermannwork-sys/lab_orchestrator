@@ -1,0 +1,24 @@
+.git
+.gitignore
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+*.egg-info
+build
+dist
+
+# runtime state and secrets never go into the image
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+deploy
+secrets
+
+tests
+*.md
+!README.md

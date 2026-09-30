@@ -1,8 +1,8 @@
 # Lab Orchestrator — Progress Log
 
-**Status as of this writing:** M0–M7 complete (of M0–M12). 135 tests
-passing, `ruff` clean. Next up: M8 (container packaging, stage-1 test
-deploy with the fake client), then M9 (host wrapper, real tux2lab). The
+**Status as of this writing:** M0–M7 complete (of M0–M12); M8 implemented,
+awaiting verification on the VPS. 140 tests passing, `ruff` clean. Next:
+run M8's done-when on the VPS, then M9 (host wrapper, real tux2lab). The
 milestones were renumbered for the test deploy — see "Test-deploy planning"
 below.
 
@@ -435,6 +435,53 @@ All of it is contained in `SSHTux2LabClient`'s parsers plus the wrapper —
 the M4 design of isolating those guesses paid off. Also found: libvirt's
 NAT rules reject new connections from Docker into `labbr0`, so the
 readiness check (and later guacd) needs a host firewall rule.
+
+## M8 — Container packaging (implemented; VPS verification pending)
+
+`Dockerfile` (python:3.12-slim, non-root uid 10001, non-editable install,
+one uvicorn worker, Python-based `HEALTHCHECK`), `.dockerignore`,
+`compose.yaml` (shared external network, `/data` volume, read-only config
+and secrets mounts, `host.docker.internal:host-gateway`, no published port),
+and `deploy/.env.example`.
+
+Two code changes:
+- **Logging to stdout.** `main.configure_logging()` attaches one stdout
+  handler to the `lab_orchestrator` logger at `LAB_ORCH_LOG_LEVEL`. Only the
+  package logger is touched, not root, and it keeps propagating so pytest's
+  `caplog` still works. This closes the gap noted in M7: INFO lines from the
+  janitor and reconciliation were invisible under uvicorn.
+- **Explicit backend.** `LAB_ORCH_TUX2LAB_BACKEND` = `auto` (unchanged local
+  behavior) | `fake` | `ssh`. With `ssh` and missing SSH settings, startup
+  fails instead of silently running against the fake client.
+
+**Judgment calls:**
+- One `deploy/.env` drives both compose interpolation (network name, host
+  paths) and the container's `LAB_ORCH_*` settings. The in-container paths
+  (DB, config, key, known_hosts) are fixed in `compose.yaml` so they can't
+  drift from the mounts.
+- The container runs as a fixed uid (10001) so host-side secret files can
+  be `chown`ed to it; documented in `deploy/.env.example`.
+
+**Worth knowing:**
+- The fake client's placeholder IP (10.28.28.100) is inside the real
+  `labbr0` range. On the VPS a fake lease could in principle reach READY if
+  a real VM holds that address; the M8 done-when is worded not to depend on
+  either outcome.
+- `instance_manager` logs nothing about provisioning transitions or
+  failures, so a failed provisioning is visible only through `GET`/the DB,
+  not in `docker logs`. Implementation plan §3 asks for structured
+  transition logs; not done yet — a small follow-up worth doing before M9.
+
+**Verified (locally, no Docker on the dev VM):** 140 tests pass, `ruff`
+clean. Simulated the image: copied only what the Dockerfile copies,
+installed non-editably into a fresh virtualenv, deleted `src/`, and booted
+uvicorn with the image's environment and `LAB_ORCH_TUX2LAB_BACKEND=fake`.
+The healthcheck command exits 0; `POST`/`GET` work; reconciliation and
+janitor INFO lines appear on stdout; SQLite creates `-wal`/`-shm` next to
+the DB (so the whole `/data` directory must be the volume); `backend=ssh`
+without settings aborts startup with a clear error. **Not yet verified:**
+`docker build`, the compose file itself, and the whole M8 done-when list —
+all need the VPS.
 
 ---
 
