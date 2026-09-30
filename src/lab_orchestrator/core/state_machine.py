@@ -69,9 +69,9 @@ class Event(str, Enum):
     INSTALL_COMPLETE = "INSTALL_COMPLETE"  # tux2lab vm install succeeded
     START_ISSUED = "START_ISSUED"  # tux2lab vm start called
     READY_CRITERIA_MET = "READY_CRITERIA_MET"  # VM_STATE==running AND OS_STATE==healthy AND TCP/22 reachable
-    TUNNEL_OPENED = "TUNNEL_OPENED"  # Guacamole tunnel established (unused until M10/M11)
-    TUNNEL_CLOSED = "TUNNEL_CLOSED"  # Guacamole tunnel closed (unused until M10/M11)
-    RECONNECTED = "RECONNECTED"  # tunnel reopened during grace (unused until M10/M11)
+    TUNNEL_OPENED = "TUNNEL_OPENED"  # Guacamole tunnel established (unused until M11/M12)
+    TUNNEL_CLOSED = "TUNNEL_CLOSED"  # Guacamole tunnel closed (unused until M11/M12)
+    RECONNECTED = "RECONNECTED"  # tunnel reopened during grace (unused until M11/M12)
     GRACE_EXPIRED = "GRACE_EXPIRED"  # 5 min disconnect grace elapsed, no reconnect (janitor, M6)
     LIFETIME_EXPIRED = "LIFETIME_EXPIRED"  # 4h hard cap reached (janitor, M6)
     FAILED = "FAILED"  # something went wrong

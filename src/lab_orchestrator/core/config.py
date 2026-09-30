@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     # Consumed starting M2 (data layer).
     db_path: Path = Path("orchestrator.db")
 
-    # Consumed starting M10 (Guacamole adapter) — where the controlled copy
+    # Consumed starting M11 (Guacamole adapter) — where the controlled copy
     # of the lab-wide VM SSH key lives (architecture doc §12).
     secrets_dir: Path = Path("/opt/lab-orchestrator/secrets")
 

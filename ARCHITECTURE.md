@@ -11,7 +11,7 @@ A small **orchestrator service** that leases ephemeral lab VMs to authenticated 
 
 **Target user workflow** (test setup on the VPS `planetsexpress.dedyn.io`, see §17):
 
-1. The user opens the site; **traefik** routes them, after **authentik** authentication, to the **web frontend** — a separate container that is part of this project (M12, not implemented yet).
+1. The user opens the site; **traefik** routes them, after **authentik** authentication, to the **web frontend** — a separate container that is part of this project (M9, not implemented yet).
 2. The user requests a VM for a specific machine. Each machine type is backed by its own prefabricated golden image containing that machine's tool-controller software (§3).
 3. The frontend calls the orchestrator, which provisions the VM through `tux2lab`.
 4. Once the VM is `READY`, the user is handed a **Guacamole session** to it (§13).
@@ -86,7 +86,7 @@ machines:
 
 ## 4. Identity (prototype vs. final)
 
-**Final:** `Browser → traefik + authentik (forward auth) → web frontend → orchestrator`. The web frontend is this project's own container (M12). It takes the authenticated username from authentik's forward-auth headers and passes it as `user`; the orchestrator never implements login/password auth itself, and its API stays unauthenticated but reachable only on the internal container network (§17). Guacamole separately uses OIDC/SSO against authentik.
+**Final:** `Browser → traefik + authentik (forward auth) → web frontend → orchestrator`. The web frontend is this project's own container (M9). It takes the authenticated username from authentik's forward-auth headers and passes it as `user`; the orchestrator never implements login/password auth itself, and its API stays unauthenticated but reachable only on the internal container network (§17). Because of that, the browser can never call the orchestrator directly: the frontend needs its own server side that calls the orchestrator by service name. The authentik header is trustworthy only because the frontend is reachable solely through traefik (no published port). Guacamole separately uses OIDC/SSO against authentik.
 
 **Prototype (now):** the orchestrator is called directly with `curl`, so identity is passed explicitly:
 
@@ -371,7 +371,7 @@ KVM HOST
 - No mounting of `/var/run/libvirt`, `/tux2lab-data`, or host root into the orchestrator container.
 - `tux2lab` itself remains completely untouched — the only integration surface is its CLI.
 
-**Wrapper design (built in this repo, `deploy/host/`, M9):**
+**Wrapper design (built in this repo, `deploy/host/`, M10):**
 
 - A dedicated host account `lab-orchestrator`. Its `authorized_keys` entry carries `restrict,command="<wrapper>"`, so the key can do nothing but run the wrapper — no shell, pty, or forwarding.
 - The wrapper parses `SSH_ORIGINAL_COMMAND` and accepts only the five commands above, with arguments checked against the same strict hostname/image patterns the adapter enforces (§14.3). Anything else is rejected and logged.
@@ -380,7 +380,7 @@ KVM HOST
 
 ## 12. SSH key handling
 
-All VMs use `labuser@<vm>`. `tux2lab` has one lab-wide private key at `/tux2lab-data/lab-config/ssh-keys/`. *(To verify in M9: `tux2lab` itself logs into VMs as the lab admin user from its own deploy config; whether that is `labuser` — §14.9.)*
+All VMs use `labuser@<vm>`. `tux2lab` has one lab-wide private key at `/tux2lab-data/lab-config/ssh-keys/`. *(To verify in M10: `tux2lab` itself logs into VMs as the lab admin user from its own deploy config; whether that is `labuser` — §14.9.)*
 
 Decision: **copy** the key into a separate, orchestrator-owned location rather than mounting `tux2lab`'s original:
 
@@ -394,9 +394,9 @@ Decision: **copy** the key into a separate, orchestrator-owned location rather t
 
 The private key must **never** appear in: curl responses, the frontend, the database, logs, or the browser. This same credential is reused later as the Guacamole SSH `private-key` connection parameter (§13) — it stays inside Guacamole's encrypted JSON payload, never returned plaintext.
 
-## 13. Guacamole integration (after M9; part of the target user flow)
+## 13. Guacamole integration (after M10; part of the target user flow)
 
-After a lease is `READY`, the web frontend obtains a Guacamole session for it (M10) and embeds or redirects to it — this is how users reach their machine (§1). Guacamole's web UI is routed by traefik; `guacd` connects to the VM **by IP** on `labbr0`, which needs the same host firewall rule as the orchestrator's readiness check (§17). The SSH example below uses the hostname for readability; the deployed payload uses the lease's IP.
+After a lease is `READY`, the web frontend obtains a Guacamole session for it (M11) and embeds or redirects to it — this is how users reach their machine (§1). Guacamole's web UI is routed by traefik; `guacd` connects to the VM **by IP** on `labbr0`, which needs the same host firewall rule as the orchestrator's readiness check (§17). The SSH example below uses the hostname for readability; the deployed payload uses the lease's IP.
 
 Whether the machines' tool-controller software needs a **graphical** session (RDP/VNC through Guacamole) rather than SSH is open (§14.11); the `protocol` field in machine definitions already allows for it.
 
@@ -429,7 +429,7 @@ Guacamole tunnel closes → listener → POST /internal/v1/guacamole/events → 
                                                           instance → DISCONNECTED_GRACE
 ```
 
-This is more reliable than trying to infer browser-window closure from the frontend. All lifecycle *logic* stays in Python; the Java piece is purely an event bridge. Built after the core allocator (provision → ready → destroy, without Guacamole) works end-to-end against the real host (M9) — as M11.
+This is more reliable than trying to infer browser-window closure from the frontend. All lifecycle *logic* stays in Python; the Java piece is purely an event bridge. Built after the core allocator (provision → ready → destroy, without Guacamole) works end-to-end against the real host (M10) — as M12.
 
 **Guacamole ↔ authentik:** future integration will use Guacamole's OIDC extension for SSO, kept as a separate concern from the VM allocator.
 
@@ -443,11 +443,11 @@ These should be explicit decisions before/while implementing, not discovered mid
 4. **CLI call idempotency.** If a `tux2lab vm install` call times out on the orchestrator side without a definitive success/failure signal, a naive retry could double-provision. The adapter should check `vm info`/`vm list` before retrying a mutating call.
 5. ~~**Hostname/DNS-suffix inconsistency**~~ — **resolved**, see §5: no username in the hostname, no orchestrator-built DNS suffix.
 6. ~~**`POST` on existing active instance**~~ — **resolved in M5**: rejected outright with `409`, not returned as the existing instance. Reasoning in `api/routes_instances.py`'s module docstring.
-7. **List/delete endpoints** — not explicitly specified (see §8). Deliberately left out of M5; still open. (The web frontend, M12, may need a "my current instance" lookup and an early-destroy action — revisit then.)
+7. **List/delete endpoints** — not explicitly specified (see §8). Deliberately left out of M5; still open. (The web frontend, M9, may need a "my current instance" lookup and an early-destroy action — revisit then.)
 8. **Named golden-image install in `tux2lab`** — external dependency (§3). Interim: the host wrapper maps image → distro/version. Nothing in the orchestrator changes when the enhancement lands.
-9. **VM login user** — `labuser` (§12) vs. `tux2lab`'s own lab admin user. Verify on the real host in M9.
+9. **VM login user** — `labuser` (§12) vs. `tux2lab`'s own lab admin user. Verify on the real host in M10.
 10. **No machine-readable `tux2lab` output** — the adapter parses colored text (§11). Fragile across `tux2lab` versions; a `--json` flag would remove the risk.
-11. **Session protocol for tool-controller software** — SSH, or a graphical session (RDP/VNC) through Guacamole? Needed before M10.
+11. **Session protocol for tool-controller software** — SSH, or a graphical session (RDP/VNC) through Guacamole? Needed before M11.
 
 ## 15. Settled decisions (checklist)
 
@@ -464,14 +464,14 @@ These should be explicit decisions before/while implementing, not discovered mid
 - [x] No Redis/Celery/RabbitMQ/Kubernetes — single process + async janitor loop
 - [x] Disposable VMs first; snapshots/persistence later (as a policy flag, not a separate system)
 - [x] SSH first; RDP later (protocol field already in machine definitions)
-- [x] Guacamole JSON-auth for ephemeral connection provisioning (M10)
-- [x] Guacamole tunnel-close event as the eventual disconnect signal (M11)
+- [x] Guacamole JSON-auth for ephemeral connection provisioning (M11)
+- [x] Guacamole tunnel-close event as the eventual disconnect signal (M12)
 - [x] v1 timers: 4h hard lifetime + 5m disconnect grace
 - [x] 30m true-idle detection deferred to next iteration
 - [x] One prefabricated golden image per machine type; interim image → distro mapping lives in the host wrapper (§3, §11)
 - [x] Host wrapper is built in this repo (`deploy/host/`), dedicated `lab-orchestrator` account with a forced command (§11)
 - [x] Orchestrator container on a Docker bridge network shared with the frontend and Guacamole; API never exposed outside it (§17)
-- [x] Web frontend is part of this project, its own container (M12); users reach VMs through Guacamole (§1, §13)
+- [x] Web frontend is part of this project, its own container (M9); users reach VMs through Guacamole (§1, §13)
 
 ## 16. Final architecture diagram
 
@@ -486,13 +486,13 @@ These should be explicit decisions before/while implementing, not discovered mid
    ▼        ▼
 ┌──────────────┐        ┌─────────────────────┐
 │ web frontend │        │ Guacamole (web UI)  │
-│   (M12)      │        │ + guacd             │
+│   (M9)      │        │ + guacd             │
 └──────┬───────┘        └──────────┬──────────┘
        │ REST (internal network)   │ SSH/RDP to VM IP
        ▼                           │
 ┌────────────────────────┐         │
 │      ORCHESTRATOR      │  HTTP   │
-│ FastAPI · Instance Mgr │────────▶│ (M10: JSON-auth tokens)
+│ FastAPI · Instance Mgr │────────▶│ (M11: JSON-auth tokens)
 │ State Machine · Quota  │         │
 │ Tux2Lab Adapter        │         │
 │ Janitor · Reconcile    │         │
@@ -525,7 +525,7 @@ VPS (host)
 ├── containers on a shared user-defined bridge network ("lab network")
 │   ├── traefik        public :443 → frontend, Guacamole web UI
 │   ├── authentik      forward auth for traefik; OIDC for Guacamole
-│   ├── web frontend   (M12) calls the orchestrator by service name
+│   ├── web frontend   (M9) calls the orchestrator by service name
 │   ├── orchestrator   no published port, no traefik route
 │   └── guacamole      guacd connects to VM IPs on labbr0
 ├── tux2lab-engine     tux2lab's own container (Podman, host network): lab DNS/DHCP/PXE
@@ -540,4 +540,4 @@ VPS (host)
 - **Process model.** Exactly **one** uvicorn worker. The janitor, the in-process provisioning tasks, and the SQLite locking model all assume a single process (§10). `docker stop` cancels in-flight provisioning; startup reconciliation cleans that up on the next start (§14.2).
 - **Logs** go to stdout/stderr, for `docker logs`.
 
-See `IMPLEMENTATION_PLAN.md` M8 (container packaging) and M9 (host wrapper + real `tux2lab`).
+See `IMPLEMENTATION_PLAN.md` M8 (container packaging) and M10 (host wrapper + real `tux2lab`).

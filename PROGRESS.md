@@ -2,9 +2,10 @@
 
 **Status as of this writing:** M0–M7 complete (of M0–M12); M8 implemented,
 awaiting verification on the VPS. 140 tests passing, `ruff` clean. Next:
-run M8's done-when on the VPS, then M9 (host wrapper, real tux2lab). The
-milestones were renumbered for the test deploy — see "Test-deploy planning"
-below.
+M9, the web frontend (stack still to be chosen). Current order: M8
+container, M9 web frontend, M10 host wrapper + real tux2lab, M11/M12
+Guacamole — see "Milestone reorder" below; older sections keep the numbers
+they had when written.
 
 This is a narrative log, not reference docs — see `README.md` for setup
 instructions and current project state. This file exists to answer "what
@@ -488,11 +489,28 @@ without settings aborts startup with a clear error. **Not yet verified:**
 `docker build`, the compose file itself, and the whole M8 done-when list —
 all need the VPS.
 
+## Milestone reorder — web frontend next
+
+The human moved the web frontend ahead of the real-host work, so the
+user-facing flow can be built and tried against the fake tux2lab backend
+first. M8 (container) keeps its number since it's already implemented and
+committed under it. New order and old numbers: **M9 web frontend** (was M12),
+**M10 host wrapper + real tux2lab** (was M9), **M11 Guacamole JSON-auth**
+(was M10), **M12 tunnel-close listener** (was M11). Docs and three code
+comments were renumbered; the sections above keep their original numbers.
+
+What M9 now has to carry, since it comes before Guacamole and the real
+host: its own server side (the browser can't reach the orchestrator API),
+identity only from the authentik header, a few orchestrator API additions
+(machine list, "my current instance", maybe early destroy — §14.7), and a
+placeholder connection view that M11 replaces with the Guacamole session.
+
 ---
 
 ## Open questions still outstanding
 
-None blocking M8. Tracked in `ARCHITECTURE.md` §14: list/delete endpoints
+None blocking M9 except its tech stack.
+Items below use the numbering at the time of writing (M9 there = today's M10). Tracked in `ARCHITECTURE.md` §14: list/delete endpoints
 (§14.7, revisit for M12), the tux2lab named-image feature (§14.8), the VM
 login user (§14.9, verify in M9), fragile text parsing (§14.10), and SSH vs.
 a graphical session for the tool-controller software (§14.11, needed before

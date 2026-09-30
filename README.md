@@ -55,7 +55,7 @@ docker compose --env-file deploy/.env logs -f
 ```
 
 - `LAB_ORCH_TUX2LAB_BACKEND=fake` for stage 1 (M8), `ssh` for stage 2
-  (M9, needs the host wrapper from `deploy/host/`).
+  (M10, needs the host wrapper from `deploy/host/`).
 - SQLite lives in the `orchestrator-data` volume at `/data`; it survives
   `docker compose down`/`up` (only `down -v` deletes it).
 - Exactly one uvicorn worker. Don't scale the service or add `--workers`.
@@ -71,7 +71,7 @@ uppercased, or a `.env` file in the repo root. Currently defined:
 |---|---|---|
 | `LAB_ORCH_MACHINES_CONFIG_PATH` | `config/machines.yaml` | M1 |
 | `LAB_ORCH_DB_PATH` | `orchestrator.db` | M2 |
-| `LAB_ORCH_SECRETS_DIR` | `/opt/lab-orchestrator/secrets` | M10 |
+| `LAB_ORCH_SECRETS_DIR` | `/opt/lab-orchestrator/secrets` | M11 |
 | `LAB_ORCH_TUX2LAB_SSH_HOST` | *(none — required)* | M4/M5 |
 | `LAB_ORCH_TUX2LAB_SSH_PORT` | `22` | M4/M5 |
 | `LAB_ORCH_TUX2LAB_SSH_USERNAME` | *(none — required)* | M4/M5 |
@@ -129,7 +129,7 @@ name in `core/config.py` before relying on a new one.
 > **Superseded by what tux2lab actually does** (checked against its source
 > during test-deploy planning; see `ARCHITECTURE.md` §11): `vm install`
 > takes `-d/-v`, `vm list`/`vm info` print colored text rather than JSON,
-> `vm remove` needs `-f`, and VMs are named by FQDN. M9 replaces the parsers
+> `vm remove` needs `-f`, and VMs are named by FQDN. M10 replaces the parsers
 > and adds the host wrapper; the notes below describe the M4 state.
 
 `SSHTux2LabClient` (`adapters/tux2lab_client.py`) has to guess at two
@@ -230,7 +230,7 @@ src/lab_orchestrator/
 └── naming.py                # opaque hostname generation
 ```
 
-`adapters/guacamole_client.py` (M10) is still a stub — a docstring describing
+`adapters/guacamole_client.py` (M11) is still a stub — a docstring describing
 scope and which milestone fills it in.
 
 ## Milestone status
@@ -308,10 +308,10 @@ scope and which milestone fills it in.
       way the image does (Docker isn't available on the dev VM). The
       done-when checklist in `IMPLEMENTATION_PLAN.md` M8 still has to run
       on the VPS.
-- [ ] M9 — Host wrapper & real tux2lab integration
-- [ ] M10 — Guacamole JSON-auth adapter
-- [ ] M11 — Guacamole tunnel-close listener *(separate Java project)*
-- [ ] M12 — Web frontend *(own container)*
+- [ ] M9 — Web frontend *(own container; against the fake backend)*
+- [ ] M10 — Host wrapper & real tux2lab integration
+- [ ] M11 — Guacamole JSON-auth adapter
+- [ ] M12 — Guacamole tunnel-close listener *(separate Java project)*
 
 ## Decisions carried over from the design docs
 
