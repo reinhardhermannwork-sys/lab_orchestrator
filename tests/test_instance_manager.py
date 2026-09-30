@@ -9,20 +9,22 @@ generator end to end.
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import re
+from datetime import timedelta
 
 import pytest
 import sqlalchemy as sa
 
 from lab_orchestrator import naming
 from lab_orchestrator.adapters.tux2lab_client import FakeTux2LabClient, Tux2LabCommandError
-from lab_orchestrator.core import instance_manager
+from lab_orchestrator.core import instance_manager, janitor
 from lab_orchestrator.core.config import Settings, load_machine_definitions
 from lab_orchestrator.core.state_machine import IllegalTransition, InstanceState
 from lab_orchestrator.db.database import create_db_engine
 from lab_orchestrator.db.init_db import init_db, sync_machine_definitions
-from lab_orchestrator.db.models import instances
+from lab_orchestrator.db.models import instances, utcnow
 
 REPO_ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
 REAL_MACHINES_CONFIG = REPO_ROOT / "config" / "machines.yaml"
@@ -291,3 +293,99 @@ async def test_provision_instance_unknown_id_is_a_safe_noop(engine, machines, tu
         settings=settings,
         instance_id="does-not-exist",
     )
+
+
+# --- concurrent janitor (M6) ----------------------------------------------
+
+
+def expire_lease(engine, instance_id):
+    with engine.begin() as conn:
+        conn.execute(
+            instances.update()
+            .where(instances.c.id == instance_id)
+            .values(expires_at=utcnow() - timedelta(seconds=1))
+        )
+
+
+async def wait_for_state(engine, instance_id, state):
+    for _ in range(200):
+        if row_of(engine, instance_id)["state"] == state.value:
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError(f"{instance_id} never reached {state.value}")
+
+
+async def test_janitor_destroy_during_readiness_polling_is_not_overwritten(
+    engine, machines, tux2lab, working_naming, monkeypatch
+):
+    """Lease expires while provisioning is still polling for readiness:
+    the janitor's DESTROYED row must not be rewritten through
+    FAILED -> CLEANUP -> DESTROYED by the provisioning task.
+    """
+
+    async def _never_reachable(host, port, timeout=3.0):
+        return False
+
+    monkeypatch.setattr(instance_manager, "_tcp_port_open", _never_reachable)
+    settings = Settings(provisioning_poll_interval_seconds=0.01, provisioning_timeout_seconds=5)
+    created = await instance_manager.create_instance(
+        engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
+    )
+    task = asyncio.create_task(
+        instance_manager.provision_instance(
+            engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+        )
+    )
+    await wait_for_state(engine, created["id"], InstanceState.WAITING_READY)
+
+    expire_lease(engine, created["id"])
+    assert await janitor.run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    destroyed = row_of(engine, created["id"])
+
+    await asyncio.wait_for(task, timeout=2)
+
+    row = row_of(engine, created["id"])
+    assert row["state"] == InstanceState.DESTROYED.value
+    assert row["failure_reason"] is None
+    assert row["destroyed_at"] == destroyed["destroyed_at"]
+    assert await tux2lab.list() == []
+
+
+async def test_lease_expiring_during_install_does_not_orphan_vm(
+    engine, machines, tux2lab, settings, working_naming, monkeypatch
+):
+    """Lease expires before install finishes: the janitor destroys a row
+    with no vm_hostname, so provisioning must remove the VM itself and
+    leave the row alone.
+    """
+    install_started = asyncio.Event()
+    release_install = asyncio.Event()
+    real_install = tux2lab.install_idempotent
+
+    async def slow_install(hostname, image):
+        install_started.set()
+        await release_install.wait()
+        await real_install(hostname, image)
+
+    monkeypatch.setattr(tux2lab, "install_idempotent", slow_install)
+
+    created = await instance_manager.create_instance(
+        engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
+    )
+    task = asyncio.create_task(
+        instance_manager.provision_instance(
+            engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+        )
+    )
+    await asyncio.wait_for(install_started.wait(), timeout=2)
+
+    expire_lease(engine, created["id"])
+    assert await janitor.run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+
+    release_install.set()
+    await asyncio.wait_for(task, timeout=2)
+
+    row = row_of(engine, created["id"])
+    assert row["state"] == InstanceState.DESTROYED.value
+    assert row["vm_hostname"] is None
+    assert await tux2lab.list() == []

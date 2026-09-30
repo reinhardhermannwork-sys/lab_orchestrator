@@ -339,18 +339,23 @@ default 300s) elapsed.
 - The set of lease-expirable states is derived from the state machine, not
   copied.
 
-**Verified:** `pytest` (114 passed) and `ruff check` clean. Also against a
+**Verified:** `ruff check` clean. Also against a
 real `uvicorn` process (fake tux2lab, lease 0.002h, janitor interval 2s):
 a `POST`ed instance reached `DESTROYED` within one janitor cycle of expiry.
 
-**Open — found during that live check:** `provision_instance` writes state
-by id only, from its own in-memory copy of the state. When the janitor
-destroys an instance that is still provisioning (here: stuck in
-WAITING_READY because the fake VM's TCP/22 is unreachable), the
-provisioning task's next `info()` raises `VMNotFoundError` and `_fail()`
-drives the already-DESTROYED row through FAILED -> CLEANUP -> DESTROYED,
-overwriting `failure_reason`/`destroyed_at` and briefly making a DESTROYED
-row active again (which the max-3 INSERT trigger assumes never happens).
-It can also orphan a VM if the lease expires before install finishes. Fix
-belongs in `instance_manager.py` (guard its UPDATEs on expected state and
-stop if the row moved on) — M5 behavior change, not done yet.
+**Found during that live check, then fixed (M5 behavior change):**
+`provision_instance` wrote state by id only, from its own in-memory copy.
+When the janitor destroyed an instance still polling for readiness, the
+provisioning task's next `info()` raised `VMNotFoundError` and `_fail()`
+drove the already-DESTROYED row through FAILED -> CLEANUP -> DESTROYED
+(overwriting `failure_reason`/`destroyed_at`, and briefly making a
+DESTROYED row active again, which the max-3 INSERT trigger assumes never
+happens). If the lease expired before install finished, the janitor saw no
+`vm_hostname` and the VM was orphaned.
+
+Now every provisioning UPDATE is a compare-and-set on the state the task
+last wrote. If the row moved on, provisioning stops touching it and only
+removes the VM it created (the janitor may not know the hostname).
+Regression tests cover both paths and fail without the fix; the live
+`uvicorn` run now ends with the janitor's DESTROYED intact and
+`failure_reason` NULL. `pytest`: 116 passed (5 consecutive runs).

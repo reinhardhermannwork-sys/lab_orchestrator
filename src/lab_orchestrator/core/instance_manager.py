@@ -74,6 +74,13 @@ class GlobalQuotaExceededError(QuotaExceededError):
     """3 instances are already active system-wide."""
 
 
+class _Superseded(Exception):
+    """Internal to `provision_instance()`: the row is no longer in the
+    state this task last wrote, because something else (the janitor)
+    took it over. Never escapes the module.
+    """
+
+
 # --- create (fast path) ---------------------------------------------------
 
 
@@ -202,6 +209,14 @@ async def provision_instance(
     call ordering, and is deliberately *not* caught alongside the
     expected-failure paths below, so it surfaces loudly instead of being
     mistaken for a VM provisioning failure.
+
+    Every UPDATE is a compare-and-set on the state this task last wrote.
+    The janitor (M6) can move the row to DESTROYING/DESTROYED while this
+    task is still running -- e.g. the lease expires mid-provisioning. When
+    that happens this task stops touching the row and only removes the VM
+    it created: if the lease ran out before `vm_hostname` was recorded,
+    the janitor had no hostname to remove, so this task is the only one
+    that knows the VM exists.
     """
     row = await get_instance(engine=engine, instance_id=instance_id)
     if row is None:
@@ -219,64 +234,82 @@ async def provision_instance(
         new_state = next_state(InstanceState(state), event)
         values = {"state": new_state.value, **extra_columns}
 
-        def _update() -> None:
+        def _update() -> bool:
             with engine.begin() as conn:
-                conn.execute(instances.update().where(instances.c.id == instance_id).values(**values))
+                result = conn.execute(
+                    instances.update()
+                    .where(instances.c.id == instance_id, instances.c.state == state)
+                    .values(**values)
+                )
+                return result.rowcount == 1
 
-        await run_in_threadpool(_update)
+        if not await run_in_threadpool(_update):
+            raise _Superseded
         state = new_state.value
 
-    async def _fail(reason: str) -> None:
-        await _transition(Event.FAILED, failure_reason=reason)
-        await _transition(Event.START_CLEANUP)
+    async def _remove_vm() -> None:
         if hostname is not None:
             try:
                 await tux2lab.remove_idempotent(hostname)
             except Tux2LabError:
                 pass  # best-effort cleanup; the real failure_reason is already recorded
+
+    async def _fail(reason: str) -> None:
+        await _transition(Event.FAILED, failure_reason=reason)
+        await _transition(Event.START_CLEANUP)
+        await _remove_vm()
         await _transition(Event.DESTROY_COMPLETE, destroyed_at=utcnow())
 
+    async def _provision() -> None:
+        nonlocal hostname
+        try:
+            # from lab_orchestrator import naming (module-level, above) so
+            # tests can monkeypatch naming.generate_hostname and have this
+            # call see it -- a bound `from ... import generate_hostname`
+            # would capture the original function object permanently.
+            hostname = naming.generate_hostname(machine)
+
+            await tux2lab.install_idempotent(hostname, machine.tux2lab_image)
+            await _transition(Event.INSTALL_COMPLETE, vm_hostname=hostname)
+
+            await tux2lab.start(hostname)
+            await _transition(Event.START_ISSUED)
+
+            deadline = time.monotonic() + settings.provisioning_timeout_seconds
+            while True:
+                info = await tux2lab.info(hostname)
+                reachable = bool(info.ip_address) and await _tcp_port_open(info.ip_address, 22)
+                if info.vm_state == "running" and info.os_state == "healthy" and reachable:
+                    await _transition(
+                        Event.READY_CRITERIA_MET, vm_ip=info.ip_address, ready_at=utcnow()
+                    )
+                    return
+                if time.monotonic() >= deadline:
+                    await _fail(
+                        f"readiness criteria not met within {settings.provisioning_timeout_seconds}s "
+                        f"(last seen: vm_state={info.vm_state!r}, os_state={info.os_state!r}, "
+                        f"tcp_22_reachable={reachable})"
+                    )
+                    return
+                await asyncio.sleep(settings.provisioning_poll_interval_seconds)
+
+        except Tux2LabError as exc:
+            await _fail(str(exc))
+        except (IllegalTransition, _Superseded):
+            raise  # IllegalTransition: a real bug here -- surface it loudly
+        except Exception as exc:
+            # Anything else unexpected: still land the row in a terminal
+            # state rather than leaving it stuck mid-transition forever
+            # (implementation plan §3: "a failed provisioning attempt should
+            # land the instance in FAILED, not leave it stuck"), but
+            # re-raise so the exception is still visible/logged, not silently
+            # swallowed.
+            await _fail(f"unexpected error: {exc}")
+            raise
+
     try:
-        # from lab_orchestrator import naming (module-level, above) so
-        # tests can monkeypatch naming.generate_hostname and have this
-        # call see it -- a bound `from ... import generate_hostname`
-        # would capture the original function object permanently.
-        hostname = naming.generate_hostname(machine)
-
-        await tux2lab.install_idempotent(hostname, machine.tux2lab_image)
-        await _transition(Event.INSTALL_COMPLETE, vm_hostname=hostname)
-
-        await tux2lab.start(hostname)
-        await _transition(Event.START_ISSUED)
-
-        deadline = time.monotonic() + settings.provisioning_timeout_seconds
-        while True:
-            info = await tux2lab.info(hostname)
-            reachable = bool(info.ip_address) and await _tcp_port_open(info.ip_address, 22)
-            if info.vm_state == "running" and info.os_state == "healthy" and reachable:
-                await _transition(
-                    Event.READY_CRITERIA_MET, vm_ip=info.ip_address, ready_at=utcnow()
-                )
-                return
-            if time.monotonic() >= deadline:
-                await _fail(
-                    f"readiness criteria not met within {settings.provisioning_timeout_seconds}s "
-                    f"(last seen: vm_state={info.vm_state!r}, os_state={info.os_state!r}, "
-                    f"tcp_22_reachable={reachable})"
-                )
-                return
-            await asyncio.sleep(settings.provisioning_poll_interval_seconds)
-
-    except Tux2LabError as exc:
-        await _fail(str(exc))
-    except IllegalTransition:
-        raise  # a real bug in this function -- let it surface loudly
-    except Exception as exc:
-        # Anything else unexpected: still land the row in a terminal
-        # state rather than leaving it stuck mid-transition forever
-        # (implementation plan §3: "a failed provisioning attempt should
-        # land the instance in FAILED, not leave it stuck"), but
-        # re-raise so the exception is still visible/logged, not silently
-        # swallowed.
-        await _fail(f"unexpected error: {exc}")
-        raise
+        await _provision()
+    except _Superseded:
+        # The janitor owns the row now; leave it alone, but don't orphan
+        # the VM (see docstring).
+        await _remove_vm()
