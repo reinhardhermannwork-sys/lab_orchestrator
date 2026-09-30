@@ -5,9 +5,10 @@ requests a machine type, the orchestrator provisions a VM through `tux2lab`,
 hands back connection details, and tears the VM down after a lifetime cap or
 a disconnect grace period.
 
-Full design context lives in `lab-orchestrator-architecture.md` (source of
-truth for *what* and *why*) and `lab-orchestrator-implementation-plan.md`
-(*how* and *in what order*) — keep both alongside this repo.
+Full design context lives in `ARCHITECTURE.md` (source of truth for *what*
+and *why*) and `IMPLEMENTATION_PLAN.md` (*how* and *in what order*).
+`PROGRESS.md` is the narrative log of each milestone's judgment calls and
+verification; `AGENTS.md` has the working rules for coding agents.
 
 v1 target: a working `POST → poll → SSH manually` flow, no Guacamole yet.
 
@@ -61,6 +62,8 @@ uppercased, or a `.env` file in the repo root. Currently defined:
 | `LAB_ORCH_PROVISIONING_POLL_INTERVAL_SECONDS` | `2.0` | M5 — this module's own judgment call; not specified in the doc |
 | `LAB_ORCH_PROVISIONING_TIMEOUT_SECONDS` | `300.0` | M5 — same |
 | `LAB_ORCH_VM_SSH_USERNAME` | `labuser` | M5 — fixed convention per architecture doc §12, not machine-specific |
+| `LAB_ORCH_JANITOR_POLL_INTERVAL_SECONDS` | `15.0` | M6 — within architecture doc §7's "every 10–15 seconds" |
+| `LAB_ORCH_DISCONNECT_GRACE_SECONDS` | `300.0` | M6 — architecture doc §7's 5-minute grace |
 
 Note the derivation is `LAB_ORCH_` + the field name uppercased, not an
 abbreviation — e.g. `machines_config_path` → `LAB_ORCH_MACHINES_CONFIG_PATH`,
@@ -186,7 +189,8 @@ src/lab_orchestrator/
 ├── core/
 │   ├── config.py            # env vars, paths, loaded machine defs
 │   ├── state_machine.py     # states + legal transitions
-│   └── instance_manager.py  # business logic: create/get/list/destroy
+│   ├── instance_manager.py  # business logic: create/get, provisioning driver
+│   └── janitor.py           # async background cleanup loop
 ├── db/
 │   ├── models.py            # table definitions
 │   ├── database.py          # connection/session handling
@@ -194,12 +198,12 @@ src/lab_orchestrator/
 ├── adapters/
 │   ├── tux2lab_client.py    # SSH/subprocess adapter to the CLI
 │   └── guacamole_client.py  # JSON-auth token builder (deferred)
-├── janitor.py                # async background cleanup loop
-└── naming.py                 # opaque hostname generation
+└── naming.py                # opaque hostname generation
 ```
 
-Modules for milestones not yet built (`janitor.py`, `adapters/guacamole_client.py`)
-are still stubs — a docstring describing scope and which milestone fills them in.
+`adapters/guacamole_client.py` (M8) is still a stub — a docstring describing
+scope and which milestone fills it in. Startup reconciliation (M7) has a
+placeholder comment in `main.py`'s lifespan but no module yet.
 
 ## Milestone status
 
@@ -249,7 +253,15 @@ are still stubs — a docstring describing scope and which milestone fills them 
       workflow test (`tests/test_api_instances.py::test_full_workflow_reaches_ready`)
       runs the real app and real naming; only the TCP/22 check is stubbed,
       since the fake client's IP isn't reachable from a sandbox.
-- [ ] M6 — Janitor
+- [x] **M6 — Janitor.** `core/janitor.py`, started from the lifespan.
+      Every `janitor_poll_interval_seconds` it destroys instances whose
+      lease expired or whose disconnect grace elapsed, via `next_state()`
+      and compare-and-set UPDATEs so it never clobbers a row provisioning
+      moved concurrently; failed removes stay in `DESTROYING` and retry
+      next pass. Provisioning's own writes were made compare-and-set too
+      after a live run exposed a janitor/provisioning race (see
+      `PROGRESS.md`, M6). Verified against a real `uvicorn` process with a
+      short lease (see `tests/test_janitor.py`).
 - [ ] M7 — Startup reconciliation
 - [ ] M8 — Guacamole JSON-auth adapter *(deferred)*
 - [ ] M9 — Guacamole tunnel-close listener *(deferred, separate Java project)*

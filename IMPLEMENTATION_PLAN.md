@@ -1,6 +1,6 @@
 # Lab Orchestrator — Implementation Plan (For the Coding Agent)
 
-**Read `lab-orchestrator-architecture.md` first.** That file is the source of truth for *what* to build and *why*; this file is the *how* and *in what order*. Don't re-derive architecture decisions from scratch — if something here seems to conflict with that file, the architecture file wins, and the conflict should be flagged back to the human rather than silently resolved.
+**Read `ARCHITECTURE.md` first.** That file is the source of truth for *what* to build and *why*; this file is the *how* and *in what order*. Don't re-derive architecture decisions from scratch — if something here seems to conflict with that file, the architecture file wins, and the conflict should be flagged back to the human rather than silently resolved.
 
 Target for v1: a working `POST → poll → SSH manually` flow, with no Guacamole involved yet. Guacamole integration is explicitly a later phase.
 
@@ -52,7 +52,7 @@ Suggested stack: **FastAPI + Pydantic v2**, **SQLite via SQLAlchemy Core** (or p
 
 ## 2. Milestones
 
-Work through these roughly in order. Each has a goal, what to build, and how to know it's done. Don't start Guacamole work (M6/M7) before M0–M5 are solid — the architecture doc is explicit that Guacamole is deferred until the core allocator works end-to-end.
+Work through these roughly in order. Each has a goal, what to build, and how to know it's done. Don't start Guacamole work (M8/M9) before M0–M7 are solid — the architecture doc is explicit that Guacamole is deferred until the core allocator works end-to-end.
 
 ### M0 — Scaffolding
 - Repo skeleton above, `pyproject.toml`, dependency install, FastAPI app that boots and serves a health check.

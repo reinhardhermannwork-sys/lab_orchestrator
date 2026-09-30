@@ -1,7 +1,7 @@
 # Lab Orchestrator — Progress Log
 
-**Status as of this writing:** M0–M5 complete (of M0–M9). 104 tests
-passing, `ruff` clean. Next up: M6 (janitor).
+**Status as of this writing:** M0–M6 complete (of M0–M9). 116 tests
+passing, `ruff` clean. Next up: M7 (startup reconciliation).
 
 This is a narrative log, not reference docs — see `README.md` for setup
 instructions and current project state. This file exists to answer "what
@@ -299,26 +299,6 @@ on tux2lab's DNS behavior and needs a real host to confirm.
 
 **Verified:** `pytest` (104 passed) and `ruff` clean.
 
----
-
-## Open questions still outstanding
-
-None blocking. The open item above (short-label resolvability) needs a real
-tux2lab host.
-
-## How verification has worked so far
-
-Worth naming as a pattern, since it's been deliberate every milestone: **a
-green test suite is treated as necessary, not sufficient.** Every
-milestone so far has also been checked against something more real than
-the test doubles — a real `uvicorn` process for M0/M1/M2, a real on-disk
-SQLite file inspected outside the app for M2, an empirical check of actual
-exception types before writing assertions about them, and an exhaustive
-rather than spot-check sweep for M3's transition table. Two real bugs
-were caught this way (the `pydantic-settings` env var name in M1) that a
-narrower "does the test pass" check would have missed.
-
-
 ## M6 — Janitor
 
 `core/janitor.py`, started from the FastAPI lifespan. Every
@@ -359,3 +339,22 @@ removes the VM it created (the janitor may not know the hostname).
 Regression tests cover both paths and fail without the fix; the live
 `uvicorn` run now ends with the janitor's DESTROYED intact and
 `failure_reason` NULL. `pytest`: 116 passed (5 consecutive runs).
+
+---
+
+## Open questions still outstanding
+
+None blocking. The open item above (short-label resolvability) needs a real
+tux2lab host.
+
+## How verification has worked so far
+
+Worth naming as a pattern, since it's been deliberate every milestone: **a
+green test suite is treated as necessary, not sufficient.** Every
+milestone so far has also been checked against something more real than
+the test doubles — a real `uvicorn` process for M0/M1/M2, a real on-disk
+SQLite file inspected outside the app for M2, an empirical check of actual
+exception types before writing assertions about them, and an exhaustive
+rather than spot-check sweep for M3's transition table. Two real bugs
+were caught this way (the `pydantic-settings` env var name in M1) that a
+narrower "does the test pass" check would have missed.

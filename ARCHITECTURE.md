@@ -36,7 +36,7 @@ LabInstance
 ```
 
 Rules:
-- **1 user → max 1 active `LabInstance`**, regardless of machine type. A second `POST` while one is active is rejected (or returns the existing instance — decide this explicitly when writing the API layer; the conversation didn't pin down which).
+- **1 user → max 1 active `LabInstance`**, regardless of machine type. A second `POST` while one is active is rejected with `409` (decided in M5, see §14.6).
 - **Host → max 3 active `LabInstance`s globally.**
 - `tux2lab` remains the sole authority over the actual VM; the orchestrator never manages VMs directly.
 
@@ -236,7 +236,7 @@ Once Guacamole is integrated, the `READY` response drops raw SSH details in favo
 { "state": "READY", "connection": { "protocol": "ssh", "guacamole_url": "..." } }
 ```
 
-Endpoints implied but **not yet explicitly specified** in the conversation — decide during API design: `GET /v1/instances` (list, likely needed for the 3-global-max check and admin visibility), and whether a manual `DELETE /v1/instances/{id}` (early destroy) is in scope for v1.
+Endpoints implied but **not yet explicitly specified** in the conversation: `GET /v1/instances` (list, likely useful for admin visibility) and a manual `DELETE /v1/instances/{id}` (early destroy). Out of scope for M5; still open for v1 (see §14.7).
 
 ## 9. Data model — SQLite
 
@@ -273,8 +273,8 @@ failure_reason
 ```
 
 Constraints:
-- **One active instance per user** — should be enforced at the DB level (e.g. a partial unique index on `user_id` where `state` is "active"), not just in application code, to avoid a race between two concurrent `POST`s. *(This wasn't explicitly resolved in the conversation — see §14.)*
-- **Max 3 active instances globally** — same atomicity concern applies.
+- **One active instance per user** — should be enforced at the DB level (e.g. a partial unique index on `user_id` where `state` is "active"), not just in application code, to avoid a race between two concurrent `POST`s. *(Resolved in M2: partial unique index on `user_id` where `state != 'DESTROYED'` — see §14.1.)*
+- **Max 3 active instances globally** — same atomicity concern applies. *(Resolved in M2: a `BEFORE INSERT` trigger counting non-`DESTROYED` rows.)*
 
 No PostgreSQL, no Redis. Rationale: modest host resources, tiny concurrency, explicitly a dev/eval system.
 
@@ -396,13 +396,13 @@ This is more reliable than trying to infer browser-window closure from the front
 
 These should be explicit decisions before/while implementing, not discovered mid-build:
 
-1. **Quota-check atomicity.** "One instance per user" and "max 3 global" were stated as rules but not as an enforcement mechanism. Recommend DB-level constraints (e.g. partial unique index) or an explicit transaction, not just an app-level `if` check, to avoid a race between two concurrent `POST /v1/instances`.
+1. ~~**Quota-check atomicity.**~~ — **resolved in M2** (DB-level partial unique index + `BEFORE INSERT` trigger, tested under concurrent writes). Original note: "One instance per user" and "max 3 global" were stated as rules but not as an enforcement mechanism. Recommend DB-level constraints (e.g. partial unique index) or an explicit transaction, not just an app-level `if` check, to avoid a race between two concurrent `POST /v1/instances`.
 2. **Restart reconciliation.** State surviving a restart (via SQLite) is not the same as state being *correct* after a restart. If the orchestrator dies mid-`vm install`, nothing currently reconciles the DB against `tux2lab vm list` on startup. Recommend an explicit reconciliation step at boot.
 3. **Host-wrapper input validation.** The SSH-based host wrapper is a deliberate privilege boundary; hostnames/params crossing it need strict validation (e.g. a tight allowed-charset regex) to avoid command injection, since this is exactly the kind of boundary that's easy to under-specify.
 4. **CLI call idempotency.** If a `tux2lab vm install` call times out on the orchestrator side without a definitive success/failure signal, a naive retry could double-provision. The adapter should check `vm info`/`vm list` before retrying a mutating call.
 5. ~~**Hostname/DNS-suffix inconsistency**~~ — **resolved**, see §5: no username in the hostname, no orchestrator-built DNS suffix.
-6. **`POST` on existing active instance** — rejected outright, or returns the existing instance? Stated informally as "rejected or return the existing instance" without a final call.
-7. **List/delete endpoints** — not explicitly specified (see §8).
+6. ~~**`POST` on existing active instance**~~ — **resolved in M5**: rejected outright with `409`, not returned as the existing instance. Reasoning in `api/routes_instances.py`'s module docstring.
+7. **List/delete endpoints** — not explicitly specified (see §8). Deliberately left out of M5; still open.
 
 ## 15. Settled decisions (checklist)
 
@@ -469,4 +469,4 @@ These should be explicit decisions before/while implementing, not discovered mid
                   └───────────┘
 ```
 
-**Next step:** turn this into the concrete Python project — package layout, state machine implementation, SQLite schema/migrations, REST contract, `Tux2LabClient` subprocess/SSH implementation, and exact Docker/host wiring. See the companion file `lab-orchestrator-implementation-plan.md`.
+**Next step:** turn this into the concrete Python project — package layout, state machine implementation, SQLite schema/migrations, REST contract, `Tux2LabClient` subprocess/SSH implementation, and exact Docker/host wiring. See the companion file `IMPLEMENTATION_PLAN.md`.
