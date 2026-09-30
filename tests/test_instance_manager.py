@@ -354,9 +354,9 @@ async def test_janitor_destroy_during_readiness_polling_is_not_overwritten(
 async def test_lease_expiring_during_install_does_not_orphan_vm(
     engine, machines, tux2lab, settings, working_naming, monkeypatch
 ):
-    """Lease expires before install finishes: the janitor destroys a row
-    with no vm_hostname, so provisioning must remove the VM itself and
-    leave the row alone.
+    """Lease expires before install finishes: the janitor's remove runs
+    before the VM exists, so provisioning must remove the VM itself once
+    install completes, and leave the row alone.
     """
     install_started = asyncio.Event()
     release_install = asyncio.Event()
@@ -387,5 +387,38 @@ async def test_lease_expiring_during_install_does_not_orphan_vm(
 
     row = row_of(engine, created["id"])
     assert row["state"] == InstanceState.DESTROYED.value
-    assert row["vm_hostname"] is None
+    assert row["vm_hostname"] is not None  # recorded before install (M7)
     assert await tux2lab.list() == []
+
+
+async def test_hostname_is_recorded_before_install(
+    engine, machines, tux2lab, settings, working_naming, always_reachable, monkeypatch
+):
+    """M7: a crash mid-install must leave a row that names the VM, so
+    reconciliation and the janitor can remove it.
+    """
+    seen_during_install = {}
+    real_install = tux2lab.install_idempotent
+
+    async def checking_install(hostname, image):
+        row = row_of(engine, created["id"])
+        seen_during_install.update(state=row["state"], vm_hostname=row["vm_hostname"])
+        await real_install(hostname, image)
+
+    monkeypatch.setattr(tux2lab, "install_idempotent", checking_install)
+
+    created = await instance_manager.create_instance(
+        engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
+    )
+    await instance_manager.provision_instance(
+        engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+    )
+
+    row = row_of(engine, created["id"])
+    assert row["state"] == InstanceState.READY.value
+    assert seen_during_install == {
+        "state": InstanceState.PROVISIONING.value,
+        "vm_hostname": row["vm_hostname"],
+    }
+    assert row["vm_hostname"] is not None
+

@@ -18,7 +18,10 @@ at claim time (e.g. a `vm_hostname` written after our SELECT), never on
 the stale candidate read.
 
 Rows left in DESTROYING -- a failed tux2lab remove, or a crash between
-claim and completion -- are picked up again on the next pass.
+claim and completion -- are picked up again on the next pass. So are rows
+in CLEANUP (the failure branch): startup reconciliation (M7) moves leases
+a crash left mid-provisioning there, and a provisioning task killed
+mid-cleanup leaves one behind. Both finish with DESTROY_COMPLETE.
 """
 
 from __future__ import annotations
@@ -70,8 +73,11 @@ def _states_accepting(event: Event) -> tuple[InstanceState, ...]:
 
 _LEASE_EXPIRABLE_STATES = _states_accepting(Event.LIFETIME_EXPIRED)
 
+# Teardown already under way; the janitor just finishes it.
+_TEARDOWN_STATES = (InstanceState.DESTROYING, InstanceState.CLEANUP)
 
-async def _transition_if(
+
+async def transition_if(
     engine: Engine,
     instance_id: str,
     current: InstanceState,
@@ -107,7 +113,7 @@ def _expiry_event(row: Row, *, now: datetime) -> Event:
 async def _load_candidates(engine: Engine, *, now: datetime, grace_cutoff: datetime) -> list[Row]:
     stmt = sa.select(instances).where(
         sa.or_(
-            instances.c.state == InstanceState.DESTROYING.value,
+            instances.c.state.in_([s.value for s in _TEARDOWN_STATES]),
             sa.and_(
                 instances.c.state.in_([s.value for s in _LEASE_EXPIRABLE_STATES]),
                 instances.c.expires_at <= now,
@@ -127,12 +133,14 @@ async def _load_candidates(engine: Engine, *, now: datetime, grace_cutoff: datet
 
 
 async def _claim(engine: Engine, row: Row, *, now: datetime) -> Row | None:
-    """Move `row` into DESTROYING, or return it as-is if it already is."""
+    """Move `row` into DESTROYING, or return it as-is if teardown is
+    already under way (DESTROYING or CLEANUP).
+    """
     state = InstanceState(row["state"])
-    if state is InstanceState.DESTROYING:
-        return row  # retry of an earlier pass
+    if state in _TEARDOWN_STATES:
+        return row  # retry of an earlier pass, or a reconciled/abandoned CLEANUP
     event = _expiry_event(row, now=now)
-    claimed = await _transition_if(engine, row["id"], state, event)
+    claimed = await transition_if(engine, row["id"], state, event)
     if claimed is not None:
         logger.info(
             "janitor: instance %s %s -> DESTROYING (%s)", row["id"], state.value, event.value
@@ -160,15 +168,16 @@ async def _destroy(engine: Engine, tux2lab: Tux2LabClient, row: Row) -> bool:
             )
             return False
 
-    destroyed = await _transition_if(
+    state = InstanceState(row["state"])
+    destroyed = await transition_if(
         engine,
         row["id"],
-        InstanceState.DESTROYING,
+        state,
         Event.DESTROY_COMPLETE,
         destroyed_at=utcnow(),
     )
     if destroyed is None:
-        logger.warning("janitor: instance %s left DESTROYING during cleanup", row["id"])
+        logger.warning("janitor: instance %s left %s during cleanup", row["id"], state.value)
         return False
     logger.info("janitor: instance %s DESTROYED", row["id"])
     return True

@@ -214,9 +214,9 @@ async def provision_instance(
     The janitor (M6) can move the row to DESTROYING/DESTROYED while this
     task is still running -- e.g. the lease expires mid-provisioning. When
     that happens this task stops touching the row and only removes the VM
-    it created: if the lease ran out before `vm_hostname` was recorded,
-    the janitor had no hostname to remove, so this task is the only one
-    that knows the VM exists.
+    it created: if the janitor cleaned up while `install` was still in
+    flight, its remove found nothing, and the VM only appeared afterwards
+    -- so this task is the only one that knows the VM exists.
     """
     row = await get_instance(engine=engine, instance_id=instance_id)
     if row is None:
@@ -229,10 +229,8 @@ async def provision_instance(
     state = row["state"]
     hostname: str | None = None
 
-    async def _transition(event: Event, **extra_columns: Any) -> None:
-        nonlocal state
-        new_state = next_state(InstanceState(state), event)
-        values = {"state": new_state.value, **extra_columns}
+    async def _write(**values: Any) -> None:
+        """Compare-and-set `values` on the row, guarded by `state`."""
 
         def _update() -> bool:
             with engine.begin() as conn:
@@ -245,6 +243,11 @@ async def provision_instance(
 
         if not await run_in_threadpool(_update):
             raise _Superseded
+
+    async def _transition(event: Event, **extra_columns: Any) -> None:
+        nonlocal state
+        new_state = next_state(InstanceState(state), event)
+        await _write(state=new_state.value, **extra_columns)
         state = new_state.value
 
     async def _remove_vm() -> None:
@@ -268,9 +271,14 @@ async def provision_instance(
             # call see it -- a bound `from ... import generate_hostname`
             # would capture the original function object permanently.
             hostname = naming.generate_hostname(machine)
+            # Recorded *before* install, not with INSTALL_COMPLETE: if the
+            # process dies mid-install, the VM may exist, and startup
+            # reconciliation (M7) / the janitor can only remove it if the
+            # row names it.
+            await _write(vm_hostname=hostname)
 
             await tux2lab.install_idempotent(hostname, machine.tux2lab_image)
-            await _transition(Event.INSTALL_COMPLETE, vm_hostname=hostname)
+            await _transition(Event.INSTALL_COMPLETE)
 
             await tux2lab.start(hostname)
             await _transition(Event.START_ISSUED)

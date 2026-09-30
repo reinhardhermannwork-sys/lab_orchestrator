@@ -1,7 +1,8 @@
 # Lab Orchestrator — Progress Log
 
-**Status as of this writing:** M0–M6 complete (of M0–M9). 116 tests
-passing, `ruff` clean. Next up: M7 (startup reconciliation).
+**Status as of this writing:** M0–M7 complete (of M0–M9). 135 tests
+passing, `ruff` clean. M8/M9 (Guacamole) are deliberately deferred; the
+remaining v1 work is verification against a real tux2lab host.
 
 This is a narrative log, not reference docs — see `README.md` for setup
 instructions and current project state. This file exists to answer "what
@@ -339,6 +340,64 @@ removes the VM it created (the janitor may not know the hostname).
 Regression tests cover both paths and fail without the fix; the live
 `uvicorn` run now ends with the janitor's DESTROYED intact and
 `failure_reason` NULL. `pytest`: 116 passed (5 consecutive runs).
+
+## M7 — Startup reconciliation
+
+`core/reconcile.py`, run in the lifespan after DB init and before the
+janitor starts (so nothing else is writing yet). Three decisions, made by
+the human before implementation:
+
+- **Leases stuck mid-transition** (`REQUESTED`/`PROVISIONING`/
+  `STARTING`/`WAITING_READY`, plus `FAILED`) are failed and cleaned up,
+  not just logged: moved to `CLEANUP` via `next_state()` with
+  `failure_reason = "orchestrator restarted while instance was <STATE>"`.
+  Log-only would have left the user locked out until lease expiry, and
+  `FAILED`/`CLEANUP` leases holding a quota slot *forever* — the janitor
+  never selected those states.
+- **VMs no active lease claims** are logged only, never removed: the host
+  may run VMs the orchestrator doesn't own.
+- **Provisioning records `vm_hostname` before `install`** (an M5 behavior
+  change), not together with `INSTALL_COMPLETE`. Before this, a crash
+  mid-install left a VM the DB couldn't name — it would only have shown up
+  as an unknown VM. The API is unchanged (`GET` still shows `hostname`
+  only once `READY`).
+
+**Janitor change:** it now finishes `CLEANUP` leases (remove VM →
+`DESTROY_COMPLETE`) the same way it retries `DESTROYING`, so reconciliation
+only touches the DB and removal gets the janitor's existing retry-on-failure.
+Reconciliation's DB step runs even when tux2lab is unreachable; the VM
+comparison is then skipped with an ERROR log, and startup continues.
+
+**Judgment call, not asked:** an active lease (`READY`/`CONNECTED`/
+`DISCONNECTED_GRACE`) whose VM is missing is logged but left as-is — the
+plan only asks to surface it, and the janitor destroys it at lease expiry.
+
+**Worth knowing:**
+- A graceful shutdown mid-provisioning cancels the provisioning task
+  (`main.py`'s lifespan), so it also leaves a stuck lease. Reconciliation
+  covers that the same way as a crash.
+- The janitor can now finish a `CLEANUP` lease while a live provisioning
+  task is still inside its own `_fail()` cleanup. Benign: both removes
+  are idempotent, the compare-and-set lets exactly one record
+  `DESTROYED`, and the provisioning task stops as `_Superseded`. One
+  wrinkle: if that `_fail()` was handling an *unexpected* exception, the
+  supersede means the exception is no longer re-raised — it survives only
+  as `failure_reason` (and as `__context__`), not as a loud error.
+- The app configures no logging, so under `uvicorn` only WARNING and
+  above from `lab_orchestrator.*` reach stderr (Python's last-resort
+  handler). Reconciliation logs its drift at WARNING for that reason; the
+  janitor's INFO lines are invisible in a live run today.
+
+**Verified:** `pytest` 135 passed (5 consecutive runs), `ruff` clean. The
+done-when test (`test_killed_mid_install_then_restart_leaves_no_stuck_or_ghost_instance`)
+cancels provisioning after tux2lab created the VM but before
+`INSTALL_COMPLETE`, then reconciles and runs the janitor: VM removed, lease
+`DESTROYED`, same user can lease again. Also against a real `uvicorn`
+process: `POST`, wait for `WAITING_READY`, `kill -9`, restart. Startup
+printed `reconcile: instance … (user hermann, VM lab-m01-aurora-…) was
+WAITING_READY when the orchestrator stopped; moved to CLEANUP…`, the lease
+reached `DESTROYED` within one janitor cycle with that `failure_reason`,
+and a new `POST` for the same user returned `202`.
 
 ---
 

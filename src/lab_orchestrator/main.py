@@ -8,7 +8,8 @@ since has hooked into `lifespan` without changing this file's shape:
     background provisioning tasks so they aren't garbage-collected
     mid-flight and can be drained at shutdown
   - M6: start the janitor background task
-  - M7: run startup reconciliation against `tux2lab vm list`
+  - M7: run startup reconciliation against `tux2lab vm list`, before
+    the janitor starts
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from lab_orchestrator.adapters.tux2lab_client import FakeTux2LabClient, SSHTux2L
 from lab_orchestrator.api.routes_instances import router as instances_router
 from lab_orchestrator.core.config import get_settings, load_machine_definitions
 from lab_orchestrator.core.janitor import janitor_loop
+from lab_orchestrator.core.reconcile import reconcile_on_startup
 from lab_orchestrator.db.database import get_engine
 from lab_orchestrator.db.init_db import init_db, sync_machine_definitions
 
@@ -66,6 +68,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.include_router(instances_router, prefix="/v1")
 
+    # Before the janitor starts and before any request can create a
+    # provisioning task, so nothing else is writing to the table yet.
+    await reconcile_on_startup(engine=engine, tux2lab=app.state.tux2lab)
+
     janitor_task = asyncio.create_task(
         janitor_loop(
             engine=app.state.db_engine,
@@ -76,7 +82,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.background_tasks.add(janitor_task)
     janitor_task.add_done_callback(app.state.background_tasks.discard)
 
-    # (M7) reconcile_on_startup()
     yield
     # --- shutdown ---
     for task in list(app.state.background_tasks):

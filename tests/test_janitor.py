@@ -148,6 +148,61 @@ async def test_cleanup_failure_leaves_destroying_for_retry(engine, settings):
     assert await tux2lab.info("lab-m01-aurora-fail1")
 
 
+async def test_cleanup_instance_is_finished(engine, settings):
+    # CLEANUP left behind by startup reconciliation (M7) or a killed
+    # provisioning task, lease not yet expired.
+    tux2lab = FakeTux2LabClient()
+    await tux2lab.install("lab-m01-aurora-clean1", "image_1_software_1")
+    insert_instance(
+        engine,
+        instance_id="cleanup",
+        state=InstanceState.CLEANUP,
+        expires_at=utcnow() + timedelta(hours=1),
+        hostname="lab-m01-aurora-clean1",
+    )
+
+    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    row = row_of(engine, "cleanup")
+    assert row["state"] == InstanceState.DESTROYED.value
+    assert row["destroyed_at"] is not None
+    assert await tux2lab.list() == []
+
+
+async def test_cleanup_remove_failure_leaves_cleanup_for_retry(engine, settings):
+    tux2lab = FakeTux2LabClient()
+    await tux2lab.install("lab-m01-aurora-clean2", "image_1_software_1")
+    tux2lab.raise_once = Tux2LabCommandError("simulated remove failure")
+    insert_instance(
+        engine,
+        instance_id="cleanup-retry",
+        state=InstanceState.CLEANUP,
+        expires_at=utcnow() + timedelta(hours=1),
+        hostname="lab-m01-aurora-clean2",
+    )
+
+    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 0
+    assert row_of(engine, "cleanup-retry")["state"] == InstanceState.CLEANUP.value
+
+    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    assert row_of(engine, "cleanup-retry")["state"] == InstanceState.DESTROYED.value
+
+
+async def test_failed_instance_is_not_touched(engine, settings):
+    # FAILED is still owned by the provisioning task that's about to move
+    # it to CLEANUP; only reconciliation (after a restart) takes it over.
+    # Not even lease expiry applies: FAILED has no LIFETIME_EXPIRED edge.
+    tux2lab = FakeTux2LabClient()
+    insert_instance(
+        engine,
+        instance_id="failing",
+        state=InstanceState.FAILED,
+        expires_at=utcnow() - timedelta(seconds=1),
+    )
+
+    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 0
+    assert row_of(engine, "failing")["state"] == InstanceState.FAILED.value
+
+
 async def test_expired_instance_without_vm_is_destroyed(engine, settings):
     tux2lab = FakeTux2LabClient()
     insert_instance(

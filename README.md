@@ -190,7 +190,8 @@ src/lab_orchestrator/
 │   ├── config.py            # env vars, paths, loaded machine defs
 │   ├── state_machine.py     # states + legal transitions
 │   ├── instance_manager.py  # business logic: create/get, provisioning driver
-│   └── janitor.py           # async background cleanup loop
+│   ├── janitor.py           # async background cleanup loop
+│   └── reconcile.py         # startup reconciliation against tux2lab
 ├── db/
 │   ├── models.py            # table definitions
 │   ├── database.py          # connection/session handling
@@ -202,8 +203,7 @@ src/lab_orchestrator/
 ```
 
 `adapters/guacamole_client.py` (M8) is still a stub — a docstring describing
-scope and which milestone fills it in. Startup reconciliation (M7) has a
-placeholder comment in `main.py`'s lifespan but no module yet.
+scope and which milestone fills it in.
 
 ## Milestone status
 
@@ -262,7 +262,16 @@ placeholder comment in `main.py`'s lifespan but no module yet.
       after a live run exposed a janitor/provisioning race (see
       `PROGRESS.md`, M6). Verified against a real `uvicorn` process with a
       short lease (see `tests/test_janitor.py`).
-- [ ] M7 — Startup reconciliation
+- [x] **M7 — Startup reconciliation.** `core/reconcile.py`, run in the
+      lifespan before the janitor starts. Leases a crash left
+      mid-provisioning (or in `FAILED`) are moved to `CLEANUP` with a
+      `failure_reason`; the janitor, which now also finishes `CLEANUP`
+      leases, removes their VM. Active leases whose VM is gone, and VMs
+      no lease claims, are logged only — never removed. Provisioning now
+      records `vm_hostname` *before* `install`, so a VM from an
+      interrupted install can be matched to its lease. Verified by
+      `kill -9` of a real `uvicorn` mid-provisioning, then restart (see
+      `tests/test_reconcile.py` and `PROGRESS.md`, M7).
 - [ ] M8 — Guacamole JSON-auth adapter *(deferred)*
 - [ ] M9 — Guacamole tunnel-close listener *(deferred, separate Java project)*
 
