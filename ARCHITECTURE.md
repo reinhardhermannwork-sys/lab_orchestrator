@@ -103,7 +103,60 @@ Example: `lab-m01-aurora-7k4m2`
 
 **Decision (resolved):** the username never appears in the VM name, and the orchestrator does not build or store a `.{username}.internal` suffix. `naming.py` generates only the short opaque label above and takes no user input. If `tux2lab`'s own DNS zoning appends a suffix, that is `tux2lab`'s concern and outside the orchestrator's contract. (Not yet verified against a real host: whether the short label resolves from the client's network, or whether the IP in the `GET` response is what users should connect to.)
 
----|---|---|
+## 6. Lifecycle state machine
+
+```
+REQUESTED
+    │
+    ▼
+PROVISIONING        (tux2lab vm install)
+    │
+    ▼
+STARTING
+    │
+    ▼
+WAITING_READY        ├── VM_STATE == running
+    │                ├── OS_STATE == healthy
+    │                └── TCP/22 reachable
+    ▼
+READY
+    │
+    ▼
+CONNECTED            (Guacamole tunnel open)
+    │
+    ├── reconnect ──────────────┐
+    │                           │
+    disconnect                  │
+    │                           │
+    ▼                           │
+DISCONNECTED_GRACE (5 min)      │
+    │                           │
+    ▼                           │
+DESTROYING ◀── expires_at reached (4h hard cap, from any state)
+    │
+    ▼
+DESTROYED
+
+Failure branch (from any state):
+FAILED → CLEANUP → DESTROYED
+```
+
+Readiness is **stricter than "VM running"**:
+
+```
+READY = VM_STATE == running
+        AND OS_STATE == healthy
+        AND TCP/22 reachable
+```
+
+No full SSH login is needed for the readiness probe — a lightweight TCP/22 check is enough. `tux2lab vm list` / `vm info` / `vm validate` supply `VM_STATE`/`OS_STATE`.
+
+The `FAILED → CLEANUP → DESTROYED` branch should exist in the state model from day one even though v1 doesn't need sophisticated recovery logic — it just needs to be a reachable state, not bolted on later.
+
+## 7. Timers & cleanup policy (v1)
+
+| Timer | Value | Status in v1 |
+|---|---|---|
 | Max lifetime | 4 hours | **Implemented** |
 | Disconnect grace | 5 minutes | **Implemented** |
 | Idle timeout | 30 minutes | **Deferred** to next iteration |
