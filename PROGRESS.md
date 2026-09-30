@@ -317,4 +317,3 @@ exception types before writing assertions about them, and an exhaustive
 rather than spot-check sweep for M3's transition table. Two real bugs
 were caught this way (the `pydantic-settings` env var name in M1) that a
 narrower "does the test pass" check would have missed.
-git_learning
