@@ -7,12 +7,12 @@ TestClient with the fake Tux2LabClient main.py wires in by default.
 
 from __future__ import annotations
 
+import re
 import time
 
 import pytest
 from fastapi.testclient import TestClient
 
-from lab_orchestrator import naming
 from lab_orchestrator.core import instance_manager
 from lab_orchestrator.core.config import get_settings
 from lab_orchestrator.db.database import get_engine
@@ -104,14 +104,10 @@ def test_post_second_request_same_user_returns_409(fast_settings, monkeypatch):
 def test_full_workflow_reaches_ready(fast_settings, monkeypatch):
     """The literal M5 done-when: architecture doc §8's
     POST -> poll -> (ssh) curl workflow, working end-to-end against the
-    fake Tux2LabClient. naming.py is still blocked, so this patches it
-    with a stand-in -- everything else is the real, unmodified app.
+    fake Tux2LabClient. Only the TCP/22 check is stubbed (the fake's IP
+    isn't reachable from the sandbox) -- naming and everything else is the
+    real, unmodified app.
     """
-
-    def _generate_hostname(machine):
-        return f"lab-{machine.code}-{machine.codename}-e2etest"
-
-    monkeypatch.setattr(naming, "generate_hostname", _generate_hostname)
 
     async def _always_reachable(host, port, timeout=3.0):
         return True
@@ -143,7 +139,8 @@ def test_full_workflow_reaches_ready(fast_settings, monkeypatch):
     assert get_response is not None
     body = get_response.json()
     assert body["state"] == "READY"
-    assert body["hostname"] == "lab-m01-aurora-e2etest"
+    assert re.fullmatch(r"lab-m01-aurora-[0-9a-z]{5}", body["hostname"])
+    assert "hermann" not in body["hostname"]
     assert body["ip"] == "10.28.28.100"
     assert body["ssh"] == {"username": "labuser", "port": 22}
     assert body["machine_name"] == "Machine 1"

@@ -1,17 +1,16 @@
 """Tests for core/instance_manager.py (M5).
 
-naming.py is still blocked (architecture doc §5) — every test here that
-needs provisioning to actually proceed past PROVISIONING monkeypatches
-`lab_orchestrator.naming.generate_hostname` with a stand-in, via the
-module reference (not a rebound import), matching how instance_manager
-itself calls it. A couple of tests deliberately *don't* patch it, to
-prove the real, still-blocked function fails the way M5's error handling
-expects it to.
+Most tests here monkeypatch `lab_orchestrator.naming.generate_hostname`
+with a deterministic stand-in (via the module reference, not a rebound
+import, matching how instance_manager itself calls it) so hostnames are
+predictable. One test deliberately doesn't patch it, to exercise the real
+generator end to end.
 """
 
 from __future__ import annotations
 
 import itertools
+import re
 
 import pytest
 import sqlalchemy as sa
@@ -195,13 +194,10 @@ async def test_provision_instance_happy_path_reaches_ready(
     assert row["ready_at"] is not None
 
 
-async def test_provision_instance_naming_still_blocked_fails_cleanly(
-    engine, machines, tux2lab, settings
+async def test_provision_instance_with_real_naming_reaches_ready(
+    engine, machines, tux2lab, settings, always_reachable
 ):
-    """Doesn't patch naming.py -- proves the real, still-blocked
-    generate_hostname produces a clean DESTROYED row with a clear
-    failure_reason, not an unhandled crash.
-    """
+    """Doesn't patch naming.py -- the real generator drives provisioning."""
     created = await instance_manager.create_instance(
         engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
     )
@@ -209,9 +205,9 @@ async def test_provision_instance_naming_still_blocked_fails_cleanly(
         engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
     )
     row = row_of(engine, created["id"])
-    assert row["state"] == InstanceState.DESTROYED.value
-    assert "architecture doc §5" in row["failure_reason"]
-    assert row["destroyed_at"] is not None
+    assert row["state"] == InstanceState.READY.value
+    assert re.fullmatch(r"lab-m01-aurora-[0-9a-z]{5}", row["vm_hostname"])
+    assert "alice" not in row["vm_hostname"]
 
 
 async def test_provision_instance_install_failure_fails_cleanly(

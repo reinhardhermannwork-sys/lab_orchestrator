@@ -128,8 +128,8 @@ class InvalidIdentifierError(Tux2LabError, ValueError):
 # --- input validation (architecture doc §14.3) --------------------------
 
 # RFC 1123 hostname-label shape: lowercase alnum, hyphens, not leading or
-# trailing with one, max 63 chars. Matches what naming.py (M5) will
-# produce, once §5's DNS-suffix question is settled.
+# trailing with one, max 63 chars. Matches what naming.py produces (a
+# single opaque label, no DNS suffix -- architecture doc §5).
 _HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 
 # tux2lab image names as seen in config/machines.yaml (e.g.

@@ -240,7 +240,7 @@ async def provision_instance(
         # from lab_orchestrator import naming (module-level, above) so
         # tests can monkeypatch naming.generate_hostname and have this
         # call see it -- a bound `from ... import generate_hostname`
-        # would capture the NotImplementedError version permanently.
+        # would capture the original function object permanently.
         hostname = naming.generate_hostname(machine)
 
         await tux2lab.install_idempotent(hostname, machine.tux2lab_image)
@@ -268,11 +268,6 @@ async def provision_instance(
             await asyncio.sleep(settings.provisioning_poll_interval_seconds)
 
     except Tux2LabError as exc:
-        await _fail(str(exc))
-    except NotImplementedError as exc:
-        # naming.py is still blocked on architecture doc §5 -- surface as
-        # a real, visible instance failure rather than an unhandled
-        # exception silently killing the background task.
         await _fail(str(exc))
     except IllegalTransition:
         raise  # a real bug in this function -- let it surface loudly
