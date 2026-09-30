@@ -319,5 +319,38 @@ were caught this way (the `pydantic-settings` env var name in M1) that a
 narrower "does the test pass" check would have missed.
 
 
-## M6
-- Janitor cleanup loop implemented: lease expiry, disconnect grace expiry, idempotent VM cleanup, retryable DESTROYING state, and background startup wiring.
+## M6 — Janitor
+
+`core/janitor.py`, started from the FastAPI lifespan. Every
+`janitor_poll_interval_seconds` (default 15s) it destroys instances whose
+lease expired or whose disconnect grace (`disconnect_grace_seconds`,
+default 300s) elapsed.
+
+- Every write goes through `next_state()` (LIFETIME_EXPIRED /
+  GRACE_EXPIRED -> DESTROYING, DESTROY_COMPLETE -> DESTROYED) and is a
+  compare-and-set on (id, observed state), so a row changed by
+  provisioning after the janitor's SELECT is left alone.
+- The claim uses `UPDATE ... RETURNING`; cleanup acts on the fresh row,
+  so a `vm_hostname` written after the SELECT is still removed.
+- VM already gone counts as success; any other tux2lab failure leaves the
+  row in DESTROYING and the next pass retries it.
+- Candidates are processed independently: an unexpected error on one row
+  is logged and doesn't abort the pass.
+- The set of lease-expirable states is derived from the state machine, not
+  copied.
+
+**Verified:** `pytest` (114 passed) and `ruff check` clean. Also against a
+real `uvicorn` process (fake tux2lab, lease 0.002h, janitor interval 2s):
+a `POST`ed instance reached `DESTROYED` within one janitor cycle of expiry.
+
+**Open — found during that live check:** `provision_instance` writes state
+by id only, from its own in-memory copy of the state. When the janitor
+destroys an instance that is still provisioning (here: stuck in
+WAITING_READY because the fake VM's TCP/22 is unreachable), the
+provisioning task's next `info()` raises `VMNotFoundError` and `_fail()`
+drives the already-DESTROYED row through FAILED -> CLEANUP -> DESTROYED,
+overwriting `failure_reason`/`destroyed_at` and briefly making a DESTROYED
+row active again (which the max-3 INSERT trigger assumes never happens).
+It can also orphan a VM if the lease expires before install finishes. Fix
+belongs in `instance_manager.py` (guard its UPDATEs on expected state and
+stop if the row moved on) — M5 behavior change, not done yet.

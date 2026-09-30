@@ -23,8 +23,8 @@ from fastapi import FastAPI
 from lab_orchestrator.adapters.tux2lab_client import FakeTux2LabClient, SSHTux2LabClient
 from lab_orchestrator.api.routes_instances import router as instances_router
 from lab_orchestrator.core.config import get_settings, load_machine_definitions
-from lab_orchestrator.db.database import get_engine
 from lab_orchestrator.core.janitor import janitor_loop
+from lab_orchestrator.db.database import get_engine
 from lab_orchestrator.db.init_db import init_db, sync_machine_definitions
 
 logger = logging.getLogger(__name__)
