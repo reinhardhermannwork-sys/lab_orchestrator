@@ -323,6 +323,12 @@ tux2lab vm remove -H <hostname>                # wrapper adds -f
 - `vm remove` asks for confirmation unless given `-f`.
 - VMs are named by **FQDN** (`lab-m01-aurora-7k4m2.hermann.internal`); a bare `-H` name is expanded to the lab domain.
 - The CLI runs as the lab user and uses passwordless `sudo` internally (virsh).
+- **Errors are printed to stdout, not stderr.** `print_error` and friends are plain `echo`s, so an error message and the exit code are the only failure signals; stderr is usually empty.
+- **Colors are always on.** The ANSI codes are hard-coded and not disabled when there is no terminal, so every output the orchestrator receives contains them.
+- **Prompts hang without a terminal.** The session has no stdin, so if a command ever reaches an interactive prompt (e.g. `vm install` with an ambiguous image choice), `read` gets end-of-input and the script loops until the orchestrator's timeout kills it. The wrapper must always pass every argument that would otherwise be asked for.
+- **`vm install` also starts the VM** and returns while it boots (~1 minute per VM for golden images, per `tux2lab`). A following `vm start` only reports "already running". Cloning the disk can take longer than the 30s default command timeout; whether an install survives the SSH channel being closed mid-run is unverified.
+
+**How a call works.** The orchestrator opens an SSH session to the host as `lab-orchestrator` and requests e.g. `tux2lab vm list`. Because the key is bound to a forced command, sshd runs the wrapper instead and hands it the requested text in `SSH_ORIGINAL_COMMAND`; the wrapper checks it and runs the real CLI on the host as the tux2lab user. The CLI's stdout, stderr, and exit code travel back over the same SSH channel. The adapter treats a non-zero exit as a command error and parses stdout into `VM`/`VMInfo` values; only those parsed values (state, IP, a failure message) reach the database. It is strictly request/response: `tux2lab` never calls the orchestrator, so the orchestrator polls (`vm info` during provisioning, `vm list` at startup).
 
 **Interim mapping.** Until `tux2lab` can install a named golden image, the wrapper translates `-i <image>` to `-d <distro> -v <version>` using a host-side map file. Once the enhancement exists, only that wrapper line changes.
 

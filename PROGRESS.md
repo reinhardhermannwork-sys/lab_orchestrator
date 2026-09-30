@@ -432,7 +432,12 @@ text, not JSON; `vm remove` prompts without `-f`; VMs are named by FQDN
 (`<name>.<user>.internal`). The last one means M7's reconciliation would
 report every real VM as unknown until M9 normalizes FQDNs in the adapter.
 All of it is contained in `SSHTux2LabClient`'s parsers plus the wrapper —
-the M4 design of isolating those guesses paid off. Also found: libvirt's
+the M4 design of isolating those guesses paid off. A closer read of the CLI
+source added four more M9 items (architecture doc §11): errors are printed
+to stdout, so today's stderr-based not-found check would never match; ANSI
+colors are always on; a prompt without a terminal loops until timeout; and
+`vm install` already starts the VM, while cloning may outlast the 30s
+command timeout. Also found: libvirt's
 NAT rules reject new connections from Docker into `labbr0`, so the
 readiness check (and later guacd) needs a host firewall rule.
 
