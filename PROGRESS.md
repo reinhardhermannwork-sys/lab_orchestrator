@@ -1,8 +1,10 @@
 # Lab Orchestrator — Progress Log
 
-**Status as of this writing:** M0–M7 complete (of M0–M9). 135 tests
-passing, `ruff` clean. M8/M9 (Guacamole) are deliberately deferred; the
-remaining v1 work is verification against a real tux2lab host.
+**Status as of this writing:** M0–M7 complete (of M0–M12). 135 tests
+passing, `ruff` clean. Next up: M8 (container packaging, stage-1 test
+deploy with the fake client), then M9 (host wrapper, real tux2lab). The
+milestones were renumbered for the test deploy — see "Test-deploy planning"
+below.
 
 This is a narrative log, not reference docs — see `README.md` for setup
 instructions and current project state. This file exists to answer "what
@@ -399,12 +401,50 @@ WAITING_READY when the orchestrator stopped; moved to CLEANUP…`, the lease
 reached `DESTROYED` within one janitor cycle with that `failure_reason`,
 and a new `POST` for the same user returned `202`.
 
+## Test-deploy planning (docs only)
+
+With M0–M7 done, the next goal is a test deploy on the real setup: a VPS
+(`planetsexpress.dedyn.io`) running traefik, authentik, Guacamole, a web
+frontend, and the orchestrator as containers, with the tux2lab CLI and KVM on
+the host. The target workflow is login → request a machine in the frontend →
+Guacamole session to that machine's VM. `ARCHITECTURE.md` (§1, §3, §4, §11,
+§13–§17) and `IMPLEMENTATION_PLAN.md` were updated; no code changed beyond
+milestone numbers in comments.
+
+**Milestones renumbered** to follow execution order: M8 container packaging
+(stage 1, fake tux2lab), M9 host wrapper + real tux2lab (completes the backend
+core), M10/M11 Guacamole (were M8/M9), M12 web frontend (new; part of this
+repo, its own container).
+
+**Decisions (by the human):**
+- One prefabricated golden image per machine type, containing that machine's
+  tool-controller software. tux2lab will be extended separately to install a
+  named image; until then the host wrapper maps image → `-d/-v`.
+- The host wrapper is built in this repo (`deploy/host/`).
+- The orchestrator runs on a Docker bridge network shared with the frontend
+  and Guacamole; its API is never exposed outside that network.
+- Staged deploy: fake client in the container first, then real tux2lab.
+
+**Worth knowing — M4's real-host assumptions were wrong.** Reading the
+tux2lab source (`github.com/Muthukumar-Subramaniam/tux2lab`) showed: `vm
+install` takes `-d/-v`, not an image; `vm list`/`vm info` print colored
+text, not JSON; `vm remove` prompts without `-f`; VMs are named by FQDN
+(`<name>.<user>.internal`). The last one means M7's reconciliation would
+report every real VM as unknown until M9 normalizes FQDNs in the adapter.
+All of it is contained in `SSHTux2LabClient`'s parsers plus the wrapper —
+the M4 design of isolating those guesses paid off. Also found: libvirt's
+NAT rules reject new connections from Docker into `labbr0`, so the
+readiness check (and later guacd) needs a host firewall rule.
+
 ---
 
 ## Open questions still outstanding
 
-None blocking. The open item above (short-label resolvability) needs a real
-tux2lab host.
+None blocking M8. Tracked in `ARCHITECTURE.md` §14: list/delete endpoints
+(§14.7, revisit for M12), the tux2lab named-image feature (§14.8), the VM
+login user (§14.9, verify in M9), fragile text parsing (§14.10), and SSH vs.
+a graphical session for the tool-controller software (§14.11, needed before
+M10). Short-label resolvability (§5) also gets checked on the real host in M9.
 
 ## How verification has worked so far
 

@@ -51,7 +51,7 @@ uppercased, or a `.env` file in the repo root. Currently defined:
 |---|---|---|
 | `LAB_ORCH_MACHINES_CONFIG_PATH` | `config/machines.yaml` | M1 |
 | `LAB_ORCH_DB_PATH` | `orchestrator.db` | M2 |
-| `LAB_ORCH_SECRETS_DIR` | `/opt/lab-orchestrator/secrets` | M8 |
+| `LAB_ORCH_SECRETS_DIR` | `/opt/lab-orchestrator/secrets` | M10 |
 | `LAB_ORCH_TUX2LAB_SSH_HOST` | *(none — required)* | M4/M5 |
 | `LAB_ORCH_TUX2LAB_SSH_PORT` | `22` | M4/M5 |
 | `LAB_ORCH_TUX2LAB_SSH_USERNAME` | *(none — required)* | M4/M5 |
@@ -103,6 +103,12 @@ name in `core/config.py` before relying on a new one.
   not the CLI wrapper's.
 
 ## Tux2Lab adapter notes
+
+> **Superseded by what tux2lab actually does** (checked against its source
+> during test-deploy planning; see `ARCHITECTURE.md` §11): `vm install`
+> takes `-d/-v`, `vm list`/`vm info` print colored text rather than JSON,
+> `vm remove` needs `-f`, and VMs are named by FQDN. M9 replaces the parsers
+> and adds the host wrapper; the notes below describe the M4 state.
 
 `SSHTux2LabClient` (`adapters/tux2lab_client.py`) has to guess at two
 things the architecture doc doesn't specify, because the host-side
@@ -202,7 +208,7 @@ src/lab_orchestrator/
 └── naming.py                # opaque hostname generation
 ```
 
-`adapters/guacamole_client.py` (M8) is still a stub — a docstring describing
+`adapters/guacamole_client.py` (M10) is still a stub — a docstring describing
 scope and which milestone fills it in.
 
 ## Milestone status
@@ -272,8 +278,11 @@ scope and which milestone fills it in.
       interrupted install can be matched to its lease. Verified by
       `kill -9` of a real `uvicorn` mid-provisioning, then restart (see
       `tests/test_reconcile.py` and `PROGRESS.md`, M7).
-- [ ] M8 — Guacamole JSON-auth adapter *(deferred)*
-- [ ] M9 — Guacamole tunnel-close listener *(deferred, separate Java project)*
+- [ ] M8 — Container packaging & stage-1 test deploy (fake tux2lab)
+- [ ] M9 — Host wrapper & real tux2lab integration
+- [ ] M10 — Guacamole JSON-auth adapter
+- [ ] M11 — Guacamole tunnel-close listener *(separate Java project)*
+- [ ] M12 — Web frontend *(own container)*
 
 ## Decisions carried over from the design docs
 
