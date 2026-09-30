@@ -127,7 +127,11 @@ The user-facing entry point (architecture doc §1, §4), built before the real-h
   - optionally early destroy ("I'm done") — `DELETE /v1/instances/{id}`
 - **Screens:** machine list → request → status (polling `GET` until `READY` or failed, with the failure reason) → connection view. Until Guacamole exists (M11), the connection view shows placeholder connection details; M11 swaps in the Guacamole session.
 - Container + compose service alongside the orchestrator's, on the same lab network, with traefik labels for the public route.
-- Tech stack: chosen at the start of this milestone (recorded here once decided).
+- **Tech stack (decided):** React + Tailwind, built with Vite, served by a thin **Node.js server (Fastify or Express), all TypeScript**, in one container under `frontend/`.
+  - The Node server serves the built static files and exposes a short, explicit list of `/api/...` routes. Each one forwards to the orchestrator by service name and sets `user` from the authentik header itself; the browser never sends a username, and there is no generic proxy. This file is the frontend's security boundary and gets its own tests.
+  - The React app is ordinary client-side React; status polling via `fetch` on an interval (or TanStack Query's `refetchInterval`).
+  - Multi-stage Dockerfile (Node build stage → slim Node runtime). Vitest for the React side and the server routes.
+  - Chosen over Next.js: the same capabilities, but the "what runs on the server" boundary stays one small, explicit file instead of being spread across server components and route handlers, and there are no framework caching layers to reason about for live VM status.
 - **Done when**, on the VPS with the fake backend: a user logged in through traefik/authentik sees the machine types, requests one, watches the status reach a terminal state, finds their lease again after a reload, and a second user can't see or act on it; a request without the authentik header is rejected.
 
 ### M10 — Host wrapper & real tux2lab integration *(stage 2)*

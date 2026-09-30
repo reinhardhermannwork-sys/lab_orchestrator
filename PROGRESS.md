@@ -2,7 +2,8 @@
 
 **Status as of this writing:** M0–M7 complete (of M0–M12); M8 implemented,
 awaiting verification on the VPS. 140 tests passing, `ruff` clean. Next:
-M9, the web frontend (stack still to be chosen). Current order: M8
+M9, the web frontend (React + Tailwind via Vite, thin TypeScript Node
+server). Current order: M8
 container, M9 web frontend, M10 host wrapper + real tux2lab, M11/M12
 Guacamole — see "Milestone reorder" below; older sections keep the numbers
 they had when written.
@@ -509,7 +510,10 @@ placeholder connection view that M11 replaces with the Guacamole session.
 
 ## Open questions still outstanding
 
-None blocking M9 except its tech stack.
+None blocking M9. Its stack is decided: React + Tailwind (Vite) with a thin
+TypeScript Node.js server (Fastify or Express) that is the only thing
+talking to the orchestrator — chosen over Next.js for a smaller, explicit
+server-side boundary (implementation plan M9).
 Items below use the numbering at the time of writing (M9 there = today's M10). Tracked in `ARCHITECTURE.md` §14: list/delete endpoints
 (§14.7, revisit for M12), the tux2lab named-image feature (§14.8), the VM
 login user (§14.9, verify in M9), fragile text parsing (§14.10), and SSH vs.

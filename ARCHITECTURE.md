@@ -472,6 +472,7 @@ These should be explicit decisions before/while implementing, not discovered mid
 - [x] Host wrapper is built in this repo (`deploy/host/`), dedicated `lab-orchestrator` account with a forced command (§11)
 - [x] Orchestrator container on a Docker bridge network shared with the frontend and Guacamole; API never exposed outside it (§17)
 - [x] Web frontend is part of this project, its own container (M9); users reach VMs through Guacamole (§1, §13)
+- [x] Web frontend stack: React + Tailwind (Vite) served by a thin TypeScript Node.js server that alone talks to the orchestrator and sets `user` from the authentik header (§4)
 
 ## 16. Final architecture diagram
 
