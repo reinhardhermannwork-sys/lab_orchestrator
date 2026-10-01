@@ -1,0 +1,18 @@
+# Override for the VPS: route the frontend through traefik, behind the
+# authentik forward-auth middleware (architecture doc §4, §17). Use with
+# compose.yaml, see its header. Values come from deploy/.env.
+#
+# Still no published port: the identity header is only trustworthy because
+# traefik (which overwrites it from authentik's response) is the only way
+# in.
+
+services:
+  lab-frontend:
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${LAB_NETWORK}
+      traefik.http.routers.lab-frontend.rule: ${LAB_FRONTEND_ROUTER_RULE:?set LAB_FRONTEND_ROUTER_RULE in deploy/.env}
+      traefik.http.routers.lab-frontend.entrypoints: ${TRAEFIK_ENTRYPOINT:?set TRAEFIK_ENTRYPOINT in deploy/.env}
+      traefik.http.routers.lab-frontend.tls.certresolver: ${TRAEFIK_CERTRESOLVER:?set TRAEFIK_CERTRESOLVER in deploy/.env}
+      traefik.http.routers.lab-frontend.middlewares: ${TRAEFIK_AUTH_MIDDLEWARE:?set TRAEFIK_AUTH_MIDDLEWARE in deploy/.env}
+      traefik.http.services.lab-frontend.loadbalancer.server.port: "3000"

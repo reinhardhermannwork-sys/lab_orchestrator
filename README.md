@@ -50,9 +50,18 @@ network (the web frontend) can reach it.
 
 ```bash
 cp deploy/.env.example deploy/.env      # set LAB_NETWORK, backend, paths
-docker compose --env-file deploy/.env up -d --build
-docker compose --env-file deploy/.env logs -f
+# on the VPS, behind traefik + authentik:
+docker compose -f compose.yaml -f deploy/compose.traefik.yaml --env-file deploy/.env up -d --build
+# on a test machine without traefik (frontend on its 127.0.0.1:3000 only):
+docker compose -f compose.yaml -f deploy/compose.test.yaml --env-file deploy/.env up -d --build
 ```
+
+`compose.yaml` is the base (both services, no published ports, no traefik
+labels); exactly one override is added for where it runs.
+`deploy/compose.traefik.yaml` adds the traefik labels.
+`deploy/compose.test.yaml` publishes the frontend on loopback only, so
+nothing else on the network can reach it and send a forged identity header;
+requests are made on the machine itself, adding the header by hand.
 
 - `LAB_ORCH_TUX2LAB_BACKEND=fake` for stage 1 (M8), `ssh` for stage 2
   (M10, needs the host wrapper from `deploy/host/`).

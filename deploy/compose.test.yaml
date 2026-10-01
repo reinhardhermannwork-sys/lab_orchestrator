@@ -1,0 +1,15 @@
+# Override for a test machine without traefik/authentik (e.g. the test VM).
+# Use with compose.yaml, see its header.
+#
+# The frontend is published on the machine's loopback interface only, so
+# nothing else on the network can reach it — important because it trusts
+# the identity header, which nothing overwrites here. Requests are sent on
+# the machine itself (or through an SSH tunnel), adding the header the way
+# traefik would:
+#
+#   curl -H 'X-authentik-username: hermann' http://127.0.0.1:3000/api/me
+
+services:
+  lab-frontend:
+    ports:
+      - "127.0.0.1:3000:3000"

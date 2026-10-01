@@ -1,11 +1,14 @@
-# Lab orchestrator (M8) and web frontend (M9) on the VPS (architecture doc §17).
+# Lab orchestrator (M8) and web frontend (M9) (architecture doc §17).
 #
-#   cp deploy/.env.example deploy/.env   # then edit
-#   docker compose --env-file deploy/.env up -d --build
+# Base file; combine it with one override for where it runs:
 #
-# Neither service publishes a port. The orchestrator has no traefik
-# labels: only containers on the shared lab network (the frontend) reach
-# it. The frontend is reachable only through traefik + authentik.
+#   VPS, behind traefik + authentik:
+#     docker compose -f compose.yaml -f deploy/compose.traefik.yaml --env-file deploy/.env up -d --build
+#   Test VM, no traefik (frontend on the VM's 127.0.0.1:3000 only):
+#     docker compose -f compose.yaml -f deploy/compose.test.yaml --env-file deploy/.env up -d --build
+#
+# Neither service publishes a port here. Only containers on the shared lab
+# network (the frontend) reach the orchestrator.
 
 name: lab-orchestrator
 
@@ -51,14 +54,6 @@ services:
       - lab
     depends_on:
       - lab-orchestrator
-    labels:
-      traefik.enable: "true"
-      traefik.docker.network: ${LAB_NETWORK}
-      traefik.http.routers.lab-frontend.rule: ${LAB_FRONTEND_ROUTER_RULE:?set LAB_FRONTEND_ROUTER_RULE in deploy/.env}
-      traefik.http.routers.lab-frontend.entrypoints: ${TRAEFIK_ENTRYPOINT:?set TRAEFIK_ENTRYPOINT in deploy/.env}
-      traefik.http.routers.lab-frontend.tls.certresolver: ${TRAEFIK_CERTRESOLVER:?set TRAEFIK_CERTRESOLVER in deploy/.env}
-      traefik.http.routers.lab-frontend.middlewares: ${TRAEFIK_AUTH_MIDDLEWARE:?set TRAEFIK_AUTH_MIDDLEWARE in deploy/.env}
-      traefik.http.services.lab-frontend.loadbalancer.server.port: "3000"
 
 volumes:
   orchestrator-data:
