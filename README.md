@@ -350,6 +350,7 @@ scope and which milestone fills it in.
       setup guide and text-parsing adapter done (`deploy/host/`); rehearsed
       on the test VM against `deploy/host/stand-in/tux2lab`. Real host
       still open. See `deploy/host/README.md` and `PROGRESS.md`.
+- [ ] M10b — Emulation mode (an emulated tux2lab host container; planned)
 - [ ] M11 — Guacamole JSON-auth adapter
 - [ ] M12 — Guacamole tunnel-close listener *(separate Java project)*
 

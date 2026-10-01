@@ -771,6 +771,16 @@ and boot times; `ssh <user>@<ip>` into a real VM; output captures for the
 fixtures; the DOCKER-USER rule for the TCP/22 probe into labbr0; the VM login
 user (§14.9) and IP vs. short name (§5).
 
+## Plan addition — M10b, emulation mode (docs only)
+
+Decided with the user: the tux2lab stand-in becomes a proper emulation mode,
+as its own milestone M10b right after M10 (numbered so M11/M12 keep their
+numbers). A container plays the tux2lab host (sshd + the real wrapper + the
+stand-in); the orchestrator uses its normal `ssh` backend against it. For
+demos/onboarding without a KVM host and for end-to-end checks before changes
+reach the real host. After M10 on purpose, so the stand-in can be checked
+against output captured on the real host. See the implementation plan.
+
 ## Open questions still outstanding
 
 None blocking M9. Its stack is decided: React + Tailwind (Vite) with a thin

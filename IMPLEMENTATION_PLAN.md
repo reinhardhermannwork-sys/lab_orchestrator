@@ -26,7 +26,8 @@ lab_orchestrator/
 │   └── machines.yaml
 ├── deploy/
 │   ├── .env.example                 # M8: compose/env settings for the VPS
-│   └── host/                        # M10: host-side restricted wrapper + setup docs
+│   ├── host/                        # M10: host-side restricted wrapper + setup docs (stand-in/: test-only tux2lab)
+│   └── emulated-host/               # M10b: container playing the tux2lab host (emulation mode)
 │       ├── lab-orchestrator-wrapper
 │       ├── images.conf.example      # interim image -> distro/version map
 │       └── README.md
@@ -149,6 +150,17 @@ Wire the container to the real `tux2lab` CLI through the restricted wrapper (arc
 - Verify and record: the VM login user (architecture doc §14.9) and whether users connect by IP or short name (§5).
 - Compose switches to `LAB_ORCH_TUX2LAB_BACKEND=ssh`.
 - **Done when**, from the container on the VPS: `POST` → `GET` reaches `READY` → `ssh <user>@<ip>` works; lease expiry removes the VM on the real host; `docker kill` mid-install then restart reconciles and the janitor removes the real VM; the wrapper refuses a non-allowlisted command (e.g. `vm stop`, `id`) when tried by hand with the orchestrator's key.
+
+### M10b — Emulation mode *(emulated tux2lab host; after M10, decided 2026-10-01)*
+Run the whole stack without a KVM host: the orchestrator in its normal `ssh` mode, talking to a container that plays the tux2lab host. For demos and onboarding (the full lab on a laptop, realistic timing), and for checking wrapper/adapter changes end to end before they reach the real host. Built after M10 so the emulation can be checked against output captured on the real host, not only against the tux2lab source.
+- **Emulated host container** (`deploy/emulated-host/`): sshd, the real `deploy/host/lab-orchestrator-wrapper`, and `deploy/host/stand-in/tux2lab` as its CLI, set up exactly as `deploy/host/README.md` describes (accounts, forced command, sudoers rule, image map). Generates its host key and accepts the orchestrator's public key at startup; nothing secret baked into the image.
+- **`deploy/compose.emulated.yaml`** override: adds that container on the lab network, sets `LAB_ORCH_TUX2LAB_BACKEND=ssh` and the SSH host to the container's service name, and provides the key/`known_hosts` setup. One command brings the emulated lab up, next to `compose.test.yaml`/`compose.traefik.yaml`.
+- **Realistic, adjustable behavior:** install and boot delays via the stand-in's settings; the IP each VM reports must be reachable on TCP/22 from the orchestrator (e.g. the emulated host's own address), so the readiness probe runs for real.
+- **Fault injection** (stand-in settings): slow installs, an install that fails, a VM that never becomes healthy, a hanging command, so the orchestrator's timeouts and cleanup can be exercised on purpose.
+- **Never mistaken for real machines:** the frontend shows a visible "emulated lab" notice when the orchestrator reports the emulated backend (an orchestrator setting surfaced through `GET /v1/machines` or a small status endpoint); the stand-in refuses to run on a host where a real tux2lab is installed (`/tux2lab` present).
+- **Kept in step with tux2lab:** `tests/fixtures/tux2lab/` holds output captured on the real host (M10); a test compares the stand-in's output for the same situations with those captures (ANSI and column widths included), so a tux2lab change shows up as a failing test.
+- The in-process `fake` backend stays for unit tests and the quickest local runs.
+- **Done when**, on a machine with only Docker: `docker compose -f compose.yaml -f deploy/compose.emulated.yaml … up -d` gives a working lab; a request goes `PROVISIONING → WAITING_READY → READY` through SSH and the wrapper with the configured delays; expiry and release remove the emulated VM; `docker kill` mid-install is reconciled; each fault-injection setting produces the expected failure state in the UI; the "emulated lab" notice is visible; the stand-in-vs-capture comparison test passes.
 
 ### M11 — Guacamole JSON-auth adapter *(after M10)*
 - Decide the session protocol first (architecture doc §14.11: SSH vs. graphical RDP/VNC for the tool-controller software).
