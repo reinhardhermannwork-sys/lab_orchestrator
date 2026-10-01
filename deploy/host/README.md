@@ -83,9 +83,12 @@ ssh-keyscan -t ed25519 127.0.0.1 2>/dev/null \
   | sed 's/^127.0.0.1/host.docker.internal/' > deploy/secrets/known_hosts
 sudo chown 10001 deploy/secrets/tux2lab_ssh_key deploy/secrets/known_hosts
 sudo chmod 400 deploy/secrets/tux2lab_ssh_key
+chmod 711 deploy/secrets
 ```
 
-(uid 10001 is the user inside the orchestrator image.)
+(uid 10001 is the user inside the orchestrator image. The directory must
+let it pass through: with mode 700 the container gets "Permission denied"
+even on files it owns. 711 allows entering it but not listing it.)
 
 ## 5. Network
 

@@ -345,6 +345,16 @@ tux2lab vm remove -H <hostname>                # wrapper adds -f
 
 **Output parsing.** Because there is no machine-readable output, the adapter parses the text (ANSI stripped) and normalizes FQDNs to the short label the orchestrator stores. This is inherently fragile; a `--json` output flag is a candidate for the `tux2lab` enhancement (§14.10).
 
+**More from the source (M10), and how the adapter reads it (decided):**
+
+- `vm info -H` has **no OS state**: it prints `State: <virsh state>` for a stopped VM, `running (SSH not accessible)` while booting, and the full tree (with `IPv4` addresses as `a.b.c.d/prefix`) once SSH answers. Only `vm list` has the OS-State column. → `info()` reads `vm list` for power and OS state, and calls `vm info -H` for the IPv4 only when the row says `running` / `healthy`.
+- `vm info -H` on an **unknown VM** prints `State: unknown` and **exits 0**. → "Not found" means the hostname is absent from `vm list`.
+- `vm list`'s VM-State is virsh's first word (`running`, `shut` for "shut off", …); OS-State is `healthy`, `SSH-Not-Ready`, another systemctl state, or `[ N/A ]`.
+- `vm start` on a running VM exits 0 ("already running"); `vm remove` on an unknown VM exits 0 ("does not exist"). The adapter checks `vm list` before `remove`, so `VMNotFoundError` keeps its meaning.
+- Errors: the wrapper passes output through untouched; the adapter takes the message from stdout's `[ERROR]` lines plus the exit code. A wrapper refusal is exit 126 with the reason on stderr.
+
+`deploy/host/stand-in/tux2lab` reproduces these five commands' output from the source for testing; the adapter's tests run the real wrapper in front of it. Output captured on the real host replaces the samples in `tests/fixtures/tux2lab/` once available.
+
 Adapter boundary:
 
 ```python

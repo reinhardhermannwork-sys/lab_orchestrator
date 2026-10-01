@@ -346,7 +346,10 @@ scope and which milestone fills it in.
       neither sees nor can read/end it (404), no login → redirect to
       authentik, a forged `X-authentik-username` is overwritten by
       traefik. See `frontend/README.md` and `PROGRESS.md`.
-- [ ] M10 — Host wrapper & real tux2lab integration
+- [ ] **M10 — Host wrapper & real tux2lab integration.** Wrapper,
+      setup guide and text-parsing adapter done (`deploy/host/`); rehearsed
+      on the test VM against `deploy/host/stand-in/tux2lab`. Real host
+      still open. See `deploy/host/README.md` and `PROGRESS.md`.
 - [ ] M11 — Guacamole JSON-auth adapter
 - [ ] M12 — Guacamole tunnel-close listener *(separate Java project)*
 

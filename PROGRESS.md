@@ -1,8 +1,9 @@
 # Lab Orchestrator — Progress Log
 
 **Status as of this writing:** M0–M9 complete (of M0–M12; M8 verified on
-the test VM, M9 on the VPS behind traefik + authentik). 159 tests passing,
-`ruff` clean. Next: M10, the host wrapper and the real tux2lab host.
+the test VM, M9 on the VPS behind traefik + authentik). M10 in progress:
+wrapper and adapter done and rehearsed on the test VM against a tux2lab
+stand-in; the real host is next. 171 tests passing, `ruff` clean.
 Current order: M8
 container, M9 web frontend, M10 host wrapper + real tux2lab, M11/M12
 Guacamole — see "Milestone reorder" below; older sections keep the numbers
@@ -720,6 +721,55 @@ browser, `hermann` and the second authentik user `labtest2`:
 Caveat (architecture doc §17): on the shared `web` network, other
 containers can still reach the frontend directly and forge the header;
 accepted while on the fake backend.
+
+## M10 part 1 — wrapper, adapter, and a rehearsal with a tux2lab stand-in
+
+The test VM can't run tux2lab: it sits inside the VPS's tux2lab lab, whose
+fixed network (10.28.28.0/22) tux2lab would recreate inside it, and it has
+1.9 GiB RAM. Instead, with the user's agreement, step A: everything up to
+tux2lab itself, rehearsed against a stand-in; step B: the real host.
+
+Read the tux2lab source (@ 0d0c7dc) for the five commands' exact output and
+exit codes. Three findings the adapter didn't handle: `vm info -H` has no OS
+state (only `vm list` does), an unknown VM gives `State: unknown` with exit 0,
+and errors only ever reach stdout. Decided with the user (architecture §11):
+`info()` = `vm list` + `vm info -H` for the IP; not found = absent from
+`vm list`; the wrapper passes output through and the adapter reads errors
+from stdout.
+
+Built: `deploy/host/lab-orchestrator-wrapper` (allowlist, adapter-equal
+patterns, `-f` on remove, `-i` → `-d/-v` via `images.conf`, stdin from
+`/dev/null`, syslog), `deploy/host/README.md` (setup steps), example configs,
+and `deploy/host/stand-in/tux2lab`, a test-only CLI reproducing the real
+output (colors, table, tree, messages, exit codes, install also starts the
+VM, boot delay, prompts that hang on a closed stdin). `SSHTux2LabClient` now
+parses that text, normalizes FQDNs to short labels, and has a separate
+install timeout (`LAB_ORCH_TUX2LAB_SSH_INSTALL_TIMEOUT`, 600 s). The client
+tests run the real wrapper + stand-in behind their local SSH server, so the
+whole chain is covered; parser tests use stand-in samples
+(`tests/fixtures/tux2lab/`) until real captures replace them.
+
+**Rehearsed on the test VM**, following `deploy/host/README.md` literally
+(a `labadmin` account playing the lab user, the stand-in as its CLI):
+- by hand with the orchestrator's key: `vm list` and an install work;
+  `vm stop`, `id`, `vm list; id` and an empty request are refused (exit 126);
+  no pty; a port forward is "administratively prohibited"; journald shows
+  RUN / REFUSED / EXIT lines
+- found and fixed in the guide: a `deploy/secrets` directory with mode 700
+  blocks the container (uid 10001) even from files it owns → `chmod 711`
+- backend `ssh`: request → PROVISIONING → WAITING_READY (+9 s) → READY
+  (+31 s) with the short hostname and the IP from `vm info`; early release
+  removes the VM; a 54 s lifetime → janitor `LIFETIME_EXPIRED` → VM removed
+- `docker kill` during install: the interrupted install left no VM (the
+  stand-in only creates it at the end); after restart reconciliation moved
+  the lease to CLEANUP and the janitor finished it. During WAITING_READY:
+  the VM existed and was removed through the wrapper after restart.
+
+**Left for the real host (step B):** whether a real install interrupted by a
+lost SSH channel finishes, fails or leaves a half-created VM; real install
+and boot times; `ssh <user>@<ip>` into a real VM; output captures for the
+fixtures; the DOCKER-USER rule for the TCP/22 probe into labbr0; the VM login
+user (§14.9) and IP vs. short name (§5).
 
 ## Open questions still outstanding
 
