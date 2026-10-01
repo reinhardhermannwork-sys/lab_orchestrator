@@ -4,12 +4,18 @@
 # The frontend is published on the machine's loopback interface only, so
 # nothing else on the network can reach it — important because it trusts
 # the identity header, which nothing overwrites here. Requests are sent on
-# the machine itself (or through an SSH tunnel), adding the header the way
-# traefik would:
+# the machine itself, adding the header the way traefik would:
 #
 #   curl -H 'X-authentik-username: hermann' http://127.0.0.1:3000/api/me
+#
+# For a browser (through an SSH tunnel to the machine's 127.0.0.1:3000),
+# set LAB_FRONTEND_DEV_USER in deploy/.env: requests without the header then
+# run as that user. Acceptable only because of the loopback-only port; the
+# SSH login is the authentication. Never set it with compose.traefik.yaml.
 
 services:
   lab-frontend:
     ports:
       - "127.0.0.1:3000:3000"
+    environment:
+      LAB_FRONTEND_DEV_USER: ${LAB_FRONTEND_DEV_USER:-}
