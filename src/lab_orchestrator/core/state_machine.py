@@ -11,7 +11,8 @@ Diagram (architecture doc §6):
     REQUESTED -> PROVISIONING -> STARTING -> WAITING_READY -> READY
     -> CONNECTED <-> DISCONNECTED_GRACE -> DESTROYING -> DESTROYED
     FAILED -> CLEANUP -> DESTROYED           (reachable from any state)
-    DESTROYING reachable from any state on the 4h lifetime cap
+    DESTROYING reachable from any state on the 4h lifetime cap, or when
+    the user releases the instance early (M9)
 
 Two judgment calls made encoding this, both worth knowing about:
 
@@ -74,6 +75,7 @@ class Event(str, Enum):
     RECONNECTED = "RECONNECTED"  # tunnel reopened during grace (unused until M11/M12)
     GRACE_EXPIRED = "GRACE_EXPIRED"  # 5 min disconnect grace elapsed, no reconnect (janitor, M6)
     LIFETIME_EXPIRED = "LIFETIME_EXPIRED"  # 4h hard cap reached (janitor, M6)
+    USER_RELEASED = "USER_RELEASED"  # user ended the lease early (DELETE, M9)
     FAILED = "FAILED"  # something went wrong
     START_CLEANUP = "START_CLEANUP"  # begin tearing down a FAILED instance
     DESTROY_COMPLETE = "DESTROY_COMPLETE"  # tux2lab vm remove succeeded / VM confirmed gone
@@ -88,8 +90,9 @@ class IllegalTransition(ValueError):
 S = InstanceState
 E = Event
 
-# Non-terminal, pre-destroy states. LIFETIME_EXPIRED and FAILED are each
-# legal from every one of these (see judgment call #2 above).
+# Non-terminal, pre-destroy states. LIFETIME_EXPIRED, USER_RELEASED and
+# FAILED are each legal from every one of these (see judgment call #2
+# above; USER_RELEASED follows LIFETIME_EXPIRED's scope exactly).
 _PRE_DESTROY_STATES: tuple[InstanceState, ...] = (
     S.REQUESTED,
     S.PROVISIONING,
@@ -118,6 +121,7 @@ _TRANSITIONS: dict[tuple[InstanceState, Event], InstanceState] = {
 # one source of truth per edge *type* rather than 14 hand-copied lines.
 for _s in _PRE_DESTROY_STATES:
     _TRANSITIONS[(_s, E.LIFETIME_EXPIRED)] = S.DESTROYING
+    _TRANSITIONS[(_s, E.USER_RELEASED)] = S.DESTROYING
     _TRANSITIONS[(_s, E.FAILED)] = S.FAILED
 del _s
 

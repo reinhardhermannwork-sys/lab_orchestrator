@@ -1,8 +1,9 @@
-"""Pydantic request/response models for the /v1/instances API
-(architecture doc §8).
+"""Pydantic request/response models for the /v1 API (architecture doc §8).
 """
 
 from __future__ import annotations
+
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -31,9 +32,12 @@ class SSHConnectionInfo(BaseModel):
 
 
 class InstanceResponse(BaseModel):
-    """GET /v1/instances/{id}. `hostname`/`ip`/`ssh` are `None` until the
-    instance reaches READY — matching the implementation plan's "includes
+    """One instance, as returned by GET/DELETE /v1/instances/{id} and the
+    per-user list. `hostname`/`ip`/`ssh` are `None` until the instance
+    reaches READY — matching the implementation plan's "includes
     hostname/ip/ssh once READY" wording literally, not just once-set.
+    `expires_at` (UTC) and `failure_reason` were added for the web
+    frontend's status screen (M9).
     """
 
     instance_id: str
@@ -43,3 +47,12 @@ class InstanceResponse(BaseModel):
     hostname: str | None = None
     ip: str | None = None
     ssh: SSHConnectionInfo | None = None
+    expires_at: datetime
+    failure_reason: str | None = None
+
+
+class MachineResponse(BaseModel):
+    """GET /v1/machines: one enabled machine type a user can request."""
+
+    machine_type: str
+    display_name: str

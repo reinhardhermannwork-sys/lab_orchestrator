@@ -1,4 +1,4 @@
-"""POST/GET /v1/instances (architecture doc §8).
+"""/v1/instances: create, get, list by user, release (architecture doc §8).
 
 Open API-design questions settled here, since neither was explicitly
 resolved in the architecture doc (§14.6, §14.7):
@@ -9,17 +9,22 @@ resolved in the architecture doc (§14.6, §14.7):
   makes this the natural behavior — returning the existing instance
   instead would need an extra lookup this endpoint doesn't otherwise
   need, for a v1 prototype with no stated need for that convenience.
-- **List/delete endpoints**: out of scope for this milestone. Not built
-  here, not silently assumed unnecessary — just not part of M5's own
-  done-when (the POST -> poll -> ssh curl workflow), left for whoever
-  picks up that open question next.
+- **List/delete endpoints** (§14.7, decided for M9): `GET
+  /v1/instances?user=` lists that user's active instances, and `DELETE
+  /v1/instances/{id}?user=` releases one early. Both require `user`:
+  there is no unfiltered listing. A release by anyone but the owner is a
+  404, indistinguishable from an unknown id. The API is still
+  unauthenticated and internal-only (§17); these checks back up the web
+  frontend's own, they don't replace authentication.
 """
 
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
+from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from lab_orchestrator.api.schemas import (
     CreateInstanceRequest,
@@ -94,16 +99,11 @@ async def create_instance(body: CreateInstanceRequest, request: Request) -> Crea
     )
 
 
-@router.get("/instances/{instance_id}", response_model=InstanceResponse)
-async def get_instance(instance_id: str, request: Request) -> InstanceResponse:
-    app_state = request.app.state
-    row = await instance_manager.get_instance(engine=app_state.db_engine, instance_id=instance_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="instance not found")
-
+def _instance_response(row: dict[str, Any], app_state: Any) -> InstanceResponse:
     machine = app_state.machines.get_machine(row["machine_type"])
+    connectable = row["state"] in _CONNECTABLE_STATES
     ssh = None
-    if row["state"] in _CONNECTABLE_STATES:
+    if connectable:
         ssh = SSHConnectionInfo(username=app_state.settings.vm_ssh_username, port=22)
 
     return InstanceResponse(
@@ -111,7 +111,54 @@ async def get_instance(instance_id: str, request: Request) -> InstanceResponse:
         machine_type=row["machine_type"],
         machine_name=machine.display_name,
         state=row["state"],
-        hostname=row["vm_hostname"] if row["state"] in _CONNECTABLE_STATES else None,
-        ip=row["vm_ip"] if row["state"] in _CONNECTABLE_STATES else None,
+        hostname=row["vm_hostname"] if connectable else None,
+        ip=row["vm_ip"] if connectable else None,
         ssh=ssh,
+        expires_at=_as_utc(row["expires_at"]),
+        failure_reason=row["failure_reason"],
     )
+
+
+def _as_utc(value: datetime) -> datetime:
+    # Stored naive-UTC (db/models.py); tag it so the JSON carries "+00:00"
+    # and a browser doesn't read it as local time.
+    return value.replace(tzinfo=UTC)
+
+
+@router.get("/instances", response_model=list[InstanceResponse])
+async def list_instances(
+    request: Request, user: str = Query(min_length=1)
+) -> list[InstanceResponse]:
+    app_state = request.app.state
+    rows = await instance_manager.list_active_instances(engine=app_state.db_engine, user_id=user)
+    return [_instance_response(row, app_state) for row in rows]
+
+
+@router.get("/instances/{instance_id}", response_model=InstanceResponse)
+async def get_instance(instance_id: str, request: Request) -> InstanceResponse:
+    app_state = request.app.state
+    row = await instance_manager.get_instance(engine=app_state.db_engine, instance_id=instance_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="instance not found")
+    return _instance_response(row, app_state)
+
+
+@router.delete(
+    "/instances/{instance_id}",
+    response_model=InstanceResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def release_instance(
+    instance_id: str, request: Request, user: str = Query(min_length=1)
+) -> InstanceResponse:
+    """Early release: 202 with the instance in DESTROYING (or already in
+    teardown); the janitor removes the VM on its next pass.
+    """
+    app_state = request.app.state
+    try:
+        row = await instance_manager.release_instance(
+            engine=app_state.db_engine, instance_id=instance_id, user_id=user
+        )
+    except instance_manager.InstanceNotFoundError:
+        raise HTTPException(status_code=404, detail="instance not found") from None
+    return _instance_response(row, app_state)

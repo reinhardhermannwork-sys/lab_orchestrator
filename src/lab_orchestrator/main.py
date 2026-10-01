@@ -29,6 +29,7 @@ from lab_orchestrator.adapters.tux2lab_client import (
     Tux2LabClient,
 )
 from lab_orchestrator.api.routes_instances import router as instances_router
+from lab_orchestrator.api.routes_machines import router as machines_router
 from lab_orchestrator.core.config import Settings, get_settings, load_machine_definitions
 from lab_orchestrator.core.janitor import janitor_loop
 from lab_orchestrator.core.reconcile import reconcile_on_startup
@@ -109,6 +110,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.background_tasks: set[asyncio.Task] = set()
 
     app.include_router(instances_router, prefix="/v1")
+    app.include_router(machines_router, prefix="/v1")
 
     # Before the janitor starts and before any request can create a
     # provisioning task, so nothing else is writing to the table yet.

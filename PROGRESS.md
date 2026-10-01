@@ -506,6 +506,38 @@ identity only from the authentik header, a few orchestrator API additions
 (machine list, "my current instance", maybe early destroy — §14.7), and a
 placeholder connection view that M11 replaces with the Guacamole session.
 
+## M9 part 1 — orchestrator API for the web frontend
+
+The three endpoints decided for M9, plus two response fields:
+
+- `GET /v1/machines` — enabled machine types from the loaded registry
+  (`api/routes_machines.py`).
+- `GET /v1/instances?user=` — that user's active leases, newest first.
+  `user` is required: there's no unfiltered listing.
+- `DELETE /v1/instances/{id}?user=` — early release, `202`. New state-machine
+  event `USER_RELEASED` with exactly `LIFETIME_EXPIRED`'s scope (every
+  pre-destroy state → `DESTROYING`), so the janitor removes the VM with no
+  new cleanup code. Owner-checked: another user's id answers `404`, the same
+  body as an unknown id. Idempotent for leases already in teardown.
+- Instance responses now include `expires_at` (tagged UTC, so browsers
+  don't read it as local time) and `failure_reason`, for the status screen.
+
+**Judgment calls:**
+- `release_instance()` writes through the janitor's compare-and-set helper
+  (`janitor.transition_if`) and re-reads on a lost race (up to 5 tries, then
+  it raises — a row changing that often would be a bug, not contention).
+- A release while provisioning is still running needs no special case: the
+  provisioning task's next compare-and-set misses, it stops as
+  `_Superseded` and removes the VM it created (M6 behavior).
+
+**Verified:** 157 tests pass (3 runs), `ruff` clean. New tests cover the
+`USER_RELEASED` scope exhaustively, release during readiness polling (no VM
+left, no overwritten state), the lost-race retry, owner/unknown 404s,
+idempotent re-release, quota freed after the janitor pass, and the machine
+list skipping disabled machines. Also against a real `uvicorn` process
+(fake backend, janitor every 2s): list → mine → 404 for another user →
+`202 DESTROYING` → janitor logs `DESTROYED` → my list is empty.
+
 ---
 
 ## Open questions still outstanding

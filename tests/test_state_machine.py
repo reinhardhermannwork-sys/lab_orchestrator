@@ -47,6 +47,7 @@ PRE_DESTROY_STATES = [
 ]
 for _s in PRE_DESTROY_STATES:
     LEGAL_TRANSITIONS.append((_s, E.LIFETIME_EXPIRED, S.DESTROYING))
+    LEGAL_TRANSITIONS.append((_s, E.USER_RELEASED, S.DESTROYING))
     LEGAL_TRANSITIONS.append((_s, E.FAILED, S.FAILED))
 
 
@@ -123,3 +124,15 @@ def test_lifetime_expired_not_legal_from_destroying_failed_cleanup_destroyed():
     for state in (S.DESTROYING, S.FAILED, S.CLEANUP, S.DESTROYED):
         with pytest.raises(IllegalTransition):
             next_state(state, E.LIFETIME_EXPIRED)
+
+
+def test_user_released_has_exactly_lifetime_expireds_scope():
+    """Early release (M9) is deliberately the same kind of edge as the
+    lifetime cap: legal from every pre-destroy state, nowhere else.
+    """
+    for state in InstanceState:
+        if state in PRE_DESTROY_STATES:
+            assert next_state(state, E.USER_RELEASED) == S.DESTROYING
+        else:
+            with pytest.raises(IllegalTransition):
+                next_state(state, E.USER_RELEASED)

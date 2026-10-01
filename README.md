@@ -308,7 +308,12 @@ scope and which milestone fills it in.
       way the image does (Docker isn't available on the dev VM). The
       done-when checklist in `IMPLEMENTATION_PLAN.md` M8 still has to run
       on the VPS.
-- [ ] M9 — Web frontend *(own container; against the fake backend)*
+- [ ] **M9 — Web frontend** *(own container; against the fake backend)*.
+      *Orchestrator side done:* `GET /v1/machines`,
+      `GET /v1/instances?user=`, `DELETE /v1/instances/{id}?user=` (early
+      release via the new `USER_RELEASED` event, owner-checked, the janitor
+      removes the VM), plus `expires_at`/`failure_reason` in instance
+      responses. *Frontend itself:* not started.
 - [ ] M10 — Host wrapper & real tux2lab integration
 - [ ] M11 — Guacamole JSON-auth adapter
 - [ ] M12 — Guacamole tunnel-close listener *(separate Java project)*

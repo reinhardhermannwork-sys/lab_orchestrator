@@ -38,6 +38,7 @@ from ulid import ULID
 
 from lab_orchestrator import naming
 from lab_orchestrator.adapters.tux2lab_client import Tux2LabError
+from lab_orchestrator.core.janitor import transition_if
 from lab_orchestrator.core.state_machine import Event, IllegalTransition, InstanceState, next_state
 from lab_orchestrator.db.models import instances, utcnow
 
@@ -72,6 +73,10 @@ class UserQuotaExceededError(QuotaExceededError):
 
 class GlobalQuotaExceededError(QuotaExceededError):
     """3 instances are already active system-wide."""
+
+
+class InstanceNotFoundError(InstanceManagerError):
+    """No such instance, or it belongs to a different user."""
 
 
 class _Superseded(Exception):
@@ -169,6 +174,71 @@ async def get_instance(*, engine: Engine, instance_id: str) -> dict[str, Any] | 
         return dict(row) if row is not None else None
 
     return await run_in_threadpool(_select)
+
+
+async def list_active_instances(*, engine: Engine, user_id: str) -> list[dict[str, Any]]:
+    """`user_id`'s active (non-DESTROYED) instances, newest first. At most
+    one in practice -- the per-user quota index (M2) guarantees it -- but
+    returned as a list so the API shape doesn't depend on that rule.
+    """
+    stmt = (
+        sa.select(instances)
+        .where(
+            instances.c.user_id == user_id,
+            instances.c.state != InstanceState.DESTROYED.value,
+        )
+        .order_by(instances.c.created_at.desc())
+    )
+
+    def _select() -> list[dict[str, Any]]:
+        with engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings()]
+
+    return await run_in_threadpool(_select)
+
+
+# --- release (early destroy, M9) --------------------------------------------
+
+# Teardown already under way or finished: releasing again is a no-op.
+_RELEASE_NOOP_STATES = {
+    InstanceState.FAILED.value,
+    InstanceState.CLEANUP.value,
+    InstanceState.DESTROYING.value,
+    InstanceState.DESTROYED.value,
+}
+
+
+async def release_instance(
+    *, engine: Engine, instance_id: str, user_id: str
+) -> dict[str, Any]:
+    """End `user_id`'s lease early: USER_RELEASED -> DESTROYING. The
+    janitor removes the VM on its next pass, exactly as for an expired
+    lease.
+
+    Raises `InstanceNotFoundError` if the instance doesn't exist *or*
+    belongs to someone else -- the API answers 404 either way, so it
+    doesn't reveal other users' instance ids. Idempotent: releasing an
+    instance already in teardown returns it unchanged.
+
+    The write is a compare-and-set (janitor.transition_if), like every
+    other state write: provisioning or the janitor may move the row
+    between our read and our write, in which case we re-read and decide
+    again.
+    """
+    for _ in range(5):
+        row = await get_instance(engine=engine, instance_id=instance_id)
+        if row is None or row["user_id"] != user_id:
+            raise InstanceNotFoundError(instance_id)
+        if row["state"] in _RELEASE_NOOP_STATES:
+            return row
+        released = await transition_if(
+            engine, instance_id, InstanceState(row["state"]), Event.USER_RELEASED
+        )
+        if released is not None:
+            return dict(released)
+    # Five lost races in a row means something is rewriting the row in a
+    # tight loop -- a bug, not contention worth hiding.
+    raise RuntimeError(f"could not release instance {instance_id}: state kept changing")
 
 
 # --- provision (slow path, background task) --------------------------------

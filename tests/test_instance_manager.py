@@ -422,3 +422,86 @@ async def test_hostname_is_recorded_before_install(
     }
     assert row["vm_hostname"] is not None
 
+
+
+# --- release (M9) ------------------------------------------------------------
+
+
+async def test_release_during_provisioning_hands_over_cleanly(
+    engine, machines, tux2lab, working_naming, monkeypatch
+):
+    """User releases while provisioning is still polling for readiness:
+    the row goes DESTROYING -> DESTROYED via the janitor, provisioning
+    stops touching it, and no VM is left behind.
+    """
+
+    async def _never_reachable(host, port, timeout=3.0):
+        return False
+
+    monkeypatch.setattr(instance_manager, "_tcp_port_open", _never_reachable)
+    settings = Settings(provisioning_poll_interval_seconds=0.01, provisioning_timeout_seconds=5)
+    created = await instance_manager.create_instance(
+        engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
+    )
+    task = asyncio.create_task(
+        instance_manager.provision_instance(
+            engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+        )
+    )
+    await wait_for_state(engine, created["id"], InstanceState.WAITING_READY)
+
+    released = await instance_manager.release_instance(
+        engine=engine, instance_id=created["id"], user_id="alice"
+    )
+    assert released["state"] == InstanceState.DESTROYING.value
+    assert await janitor.run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    await asyncio.wait_for(task, timeout=2)
+
+    row = row_of(engine, created["id"])
+    assert row["state"] == InstanceState.DESTROYED.value
+    assert row["failure_reason"] is None
+    assert await tux2lab.list() == []
+
+
+async def test_release_wrong_user_raises_not_found(engine, machines, settings):
+    created = await instance_manager.create_instance(
+        engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
+    )
+    with pytest.raises(instance_manager.InstanceNotFoundError):
+        await instance_manager.release_instance(
+            engine=engine, instance_id=created["id"], user_id="mallory"
+        )
+    assert row_of(engine, created["id"])["state"] == InstanceState.PROVISIONING.value
+
+
+async def test_release_retries_after_losing_a_race(engine, machines, settings, monkeypatch):
+    """The row moves between release's read and its compare-and-set (here:
+    provisioning advances PROVISIONING -> STARTING). The first write must
+    miss, and the retry must release from the new state.
+    """
+    created = await instance_manager.create_instance(
+        engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
+    )
+    real_get = instance_manager.get_instance
+    calls = 0
+
+    async def get_then_advance(**kwargs):
+        nonlocal calls
+        row = await real_get(**kwargs)
+        calls += 1
+        if calls == 1:
+            with engine.begin() as conn:
+                conn.execute(
+                    instances.update()
+                    .where(instances.c.id == created["id"])
+                    .values(state=InstanceState.STARTING.value)
+                )
+        return row
+
+    monkeypatch.setattr(instance_manager, "get_instance", get_then_advance)
+
+    released = await instance_manager.release_instance(
+        engine=engine, instance_id=created["id"], user_id="alice"
+    )
+    assert calls == 2
+    assert released["state"] == InstanceState.DESTROYING.value
