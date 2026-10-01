@@ -247,7 +247,15 @@ Once Guacamole is integrated, the `READY` response drops raw SSH details in favo
 { "state": "READY", "connection": { "protocol": "ssh", "guacamole_url": "..." } }
 ```
 
-Endpoints implied but **not yet explicitly specified** in the conversation: `GET /v1/instances` (list, likely useful for admin visibility) and a manual `DELETE /v1/instances/{id}` (early destroy). Out of scope for M5; still open for v1 (see §14.7).
+**Added for the web frontend (M9, decided):**
+
+```
+GET    /v1/machines                         → enabled machine types (machine_type, display_name)
+GET    /v1/instances?user=<name>            → that user's active leases (0 or 1)
+DELETE /v1/instances/{id}?user=<name>       → 202, early release; 404 unless <name> owns it
+```
+
+Early release adds one state-machine event, `USER_RELEASED`: from any pre-destroy state to `DESTROYING`, exactly like `LIFETIME_EXPIRED` (§6). The janitor then removes the VM as it does for an expired lease. The API itself stays unauthenticated and internal (§4, §17); the ownership check is defense in depth behind the frontend's own check.
 
 ## 9. Data model — SQLite
 
@@ -443,7 +451,7 @@ These should be explicit decisions before/while implementing, not discovered mid
 4. **CLI call idempotency.** If a `tux2lab vm install` call times out on the orchestrator side without a definitive success/failure signal, a naive retry could double-provision. The adapter should check `vm info`/`vm list` before retrying a mutating call.
 5. ~~**Hostname/DNS-suffix inconsistency**~~ — **resolved**, see §5: no username in the hostname, no orchestrator-built DNS suffix.
 6. ~~**`POST` on existing active instance**~~ — **resolved in M5**: rejected outright with `409`, not returned as the existing instance. Reasoning in `api/routes_instances.py`'s module docstring.
-7. **List/delete endpoints** — not explicitly specified (see §8). Deliberately left out of M5; still open. (The web frontend, M9, may need a "my current instance" lookup and an early-destroy action — revisit then.)
+7. ~~**List/delete endpoints**~~ — **decided for M9** (§8): `GET /v1/machines`, `GET /v1/instances?user=`, and `DELETE /v1/instances/{id}?user=` as early release via a new `USER_RELEASED` event. An admin-wide list remains out of scope.
 8. **Named golden-image install in `tux2lab`** — external dependency (§3). Interim: the host wrapper maps image → distro/version. Nothing in the orchestrator changes when the enhancement lands.
 9. **VM login user** — `labuser` (§12) vs. `tux2lab`'s own lab admin user. Verify on the real host in M10.
 10. **No machine-readable `tux2lab` output** — the adapter parses colored text (§11). Fragile across `tux2lab` versions; a `--json` flag would remove the risk.
@@ -472,7 +480,8 @@ These should be explicit decisions before/while implementing, not discovered mid
 - [x] Host wrapper is built in this repo (`deploy/host/`), dedicated `lab-orchestrator` account with a forced command (§11)
 - [x] Orchestrator container on a Docker bridge network shared with the frontend and Guacamole; API never exposed outside it (§17)
 - [x] Web frontend is part of this project, its own container (M9); users reach VMs through Guacamole (§1, §13)
-- [x] Web frontend stack: React + Tailwind (Vite) served by a thin TypeScript Node.js server that alone talks to the orchestrator and sets `user` from the authentik header (§4)
+- [x] Web frontend stack: React + Tailwind (Vite) served by a thin TypeScript Node.js server (Fastify) that alone talks to the orchestrator and sets `user` from the authentik header `X-authentik-username` (§4)
+- [x] Users can release their VM early (`DELETE`, new `USER_RELEASED` event) so finished sessions free one of the 3 global slots (§8)
 
 ## 16. Final architecture diagram
 

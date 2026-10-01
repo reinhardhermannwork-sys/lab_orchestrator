@@ -121,18 +121,20 @@ Package the orchestrator as a container and run it on the VPS per architecture d
 The user-facing entry point (architecture doc §1, §4), built before the real-host and Guacamole work so the flow can be tried end-to-end with the fake tux2lab backend from M8.
 - **Needs a server side.** The orchestrator API is only reachable on the internal lab network (§17), so the browser can never call it directly: the frontend container calls the orchestrator server-side, by service name, and serves the pages.
 - **Identity from authentik only.** Served through traefik behind authentik forward auth; the username comes from authentik's forward-auth header and is passed as `user` — never from form input. The header is only trustworthy because the container has no published port and is reachable only through traefik; say so in its compose file. Local development gets an explicit, off-by-default dev-user setting instead of the header.
-- **Orchestrator API additions** it needs — each an open API decision to settle when M9 starts (§14.7):
-  - list the enabled machine types (display name, code) — today only `machines.yaml` knows them
-  - "my current instance" for a user, so a page reload finds the running lease
-  - optionally early destroy ("I'm done") — `DELETE /v1/instances/{id}`
+- **Orchestrator API additions (decided, architecture doc §8, §14.7):**
+  - `GET /v1/machines` — the enabled machine types (`machine_type`, `display_name`).
+  - `GET /v1/instances?user=<name>` — that user's active leases (0 or 1), so a page reload finds the running VM.
+  - `DELETE /v1/instances/{id}?user=<name>` — early release ("I'm done"), so a finished user frees one of the 3 global slots. `404` unless `user` owns the lease. Implemented as a new state-machine event `USER_RELEASED` (any pre-destroy state → `DESTROYING`, like `LIFETIME_EXPIRED`); the janitor removes the VM exactly as for an expired lease. Returns `202`.
+- **Identity header (decided):** `X-authentik-username`, configurable via an env setting. The traefik forward-auth middleware must list it in `authResponseHeaders`, which makes traefik overwrite any value a client sends — verify on the VPS.
 - **Screens:** machine list → request → status (polling `GET` until `READY` or failed, with the failure reason) → connection view. Until Guacamole exists (M11), the connection view shows placeholder connection details; M11 swaps in the Guacamole session.
 - Container + compose service alongside the orchestrator's, on the same lab network, with traefik labels for the public route.
-- **Tech stack (decided):** React + Tailwind, built with Vite, served by a thin **Node.js server (Fastify or Express), all TypeScript**, in one container under `frontend/`.
+- **Tech stack (decided):** React + Tailwind, built with Vite, served by a thin **Node.js server (Fastify), all TypeScript**, in one container under `frontend/`.
   - The Node server serves the built static files and exposes a short, explicit list of `/api/...` routes. Each one forwards to the orchestrator by service name and sets `user` from the authentik header itself; the browser never sends a username, and there is no generic proxy. This file is the frontend's security boundary and gets its own tests.
   - The React app is ordinary client-side React; status polling via `fetch` on an interval (or TanStack Query's `refetchInterval`).
   - Multi-stage Dockerfile (Node build stage → slim Node runtime). Vitest for the React side and the server routes.
+  - Fastify over Express: built-in request validation (useful at a security boundary), first-class TypeScript types, and stdout logging out of the box.
   - Chosen over Next.js: the same capabilities, but the "what runs on the server" boundary stays one small, explicit file instead of being spread across server components and route handlers, and there are no framework caching layers to reason about for live VM status.
-- **Done when**, on the VPS with the fake backend: a user logged in through traefik/authentik sees the machine types, requests one, watches the status reach a terminal state, finds their lease again after a reload, and a second user can't see or act on it; a request without the authentik header is rejected.
+- **Done when**, on the VPS with the fake backend: a user logged in through traefik/authentik sees the machine types, requests one, watches the status reach a terminal state, finds their lease again after a reload, and a second user can't see or act on it; a request without the authentik header is rejected, and a request with a forged `X-authentik-username` still runs as the logged-in user (traefik overwrites it).
 
 ### M10 — Host wrapper & real tux2lab integration *(stage 2)*
 Wire the container to the real `tux2lab` CLI through the restricted wrapper (architecture doc §11) and make the adapter match the CLI's real behavior.

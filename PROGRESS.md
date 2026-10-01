@@ -513,7 +513,11 @@ placeholder connection view that M11 replaces with the Guacamole session.
 None blocking M9. Its stack is decided: React + Tailwind (Vite) with a thin
 TypeScript Node.js server (Fastify or Express) that is the only thing
 talking to the orchestrator — chosen over Next.js for a smaller, explicit
-server-side boundary (implementation plan M9).
+server-side boundary (implementation plan M9). Further M9 decisions,
+delegated to me by the human and recorded in the docs: Fastify over
+Express; three API additions (`GET /v1/machines`, `GET /v1/instances?user=`,
+`DELETE /v1/instances/{id}?user=` as early release via a new
+`USER_RELEASED` event, owner-checked); identity from `X-authentik-username`.
 Items below use the numbering at the time of writing (M9 there = today's M10). Tracked in `ARCHITECTURE.md` §14: list/delete endpoints
 (§14.7, revisit for M12), the tux2lab named-image feature (§14.8), the VM
 login user (§14.9, verify in M9), fragile text parsing (§14.10), and SSH vs.
