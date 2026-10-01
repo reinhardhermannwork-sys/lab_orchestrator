@@ -63,6 +63,16 @@ labels); exactly one override is added for where it runs.
 nothing else on the network can reach it and send a forged identity header;
 requests are made on the machine itself, adding the header by hand.
 
+Behind traefik, authentik needs (once, in its admin UI): a **Proxy
+provider** in mode *Forward auth (single application)* with external host
+`https://<LAB_HOSTNAME>`, an **application** using it, and that application
+added to the **embedded outpost**. `deploy/compose.traefik.yaml` routes the
+hostname's `/outpost.goauthentik.io/` paths to the outpost with priority 100;
+traefik's automatic priority is the rule's length, so without an explicit
+higher one the frontend's own router wins and the login ends in a 404. No
+other router may match those paths on every host (the VPS's dashboard router
+once did, with `|| PathPrefix(...)`, which broke every forward-auth login).
+
 - `LAB_ORCH_TUX2LAB_BACKEND=fake` for stage 1 (M8), `ssh` for stage 2
   (M10, needs the host wrapper from `deploy/host/`).
 - SQLite lives in the `orchestrator-data` volume at `/data`; it survives

@@ -658,6 +658,33 @@ in `docker logs`.
 
 ---
 
+## M9 on the VPS — preparation (traefik + authentik)
+
+Decided with the user: the frontend is served at `lab.planetsexpress.dedyn.io`
+(deSEC A record added, resolves to the VPS) and, for now, on traefik's
+existing `web` network instead of a separate lab network. That is a known,
+temporary shortcut: the VPS's other containers can reach the orchestrator
+and the frontend directly, bypassing authentik (architecture doc §17).
+
+Read from the VPS: entrypoint `websecure`, certresolver `letsencrypt`,
+forward-auth middleware `authentik@file`, whose `authResponseHeaders`
+includes `X-authentik-username`. In authentik: a Proxy provider ("Forward
+auth (single application)", external host `https://lab.planetsexpress.dedyn.io`),
+an application `Lab` using it, added to the embedded outpost; second test
+user `labtest2`.
+
+Found while debugging the VPS's existing Streamlit login (always 404 after
+authentik): traefik's dashboard router had `|| PathPrefix(/outpost.goauthentik.io/)`
+in its rule at priority 81, so every host's login callback went to the
+dashboard; and the Streamlit outpost router's explicit priority 15 lost to
+the app router's automatic ~41. Both fixed on the VPS (Streamlit login now
+works). `deploy/compose.traefik.yaml` therefore adds a second router for the
+lab hostname's `/outpost.goauthentik.io/` paths with priority 100, and the
+single `LAB_FRONTEND_ROUTER_RULE` setting became `LAB_HOSTNAME` (plus
+`TRAEFIK_AUTH_OUTPOST_SERVICE`). Checked: `docker compose config` on the test
+VM renders both routers as intended. **Not yet done:** the deploy itself and
+the M9 done-when checks.
+
 ## Open questions still outstanding
 
 None blocking M9. Its stack is decided: React + Tailwind (Vite) with a thin

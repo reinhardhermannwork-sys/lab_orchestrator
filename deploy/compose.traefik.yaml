@@ -5,14 +5,30 @@
 # Still no published port: the identity header is only trustworthy because
 # traefik (which overwrites it from authentik's response) is the only way
 # in.
+#
+# Two routers on the same hostname:
+#   lab-frontend       everything else → the frontend, behind forward auth
+#   lab-frontend-auth  /outpost.goauthentik.io/ → authentik's outpost. The
+#                      login callback after authentik's login page lands
+#                      here; without it the login ends in a 404. Its
+#                      priority must beat lab-frontend's automatic one
+#                      (the rule's length, ~40), hence the explicit 100.
 
 services:
   lab-frontend:
     labels:
       traefik.enable: "true"
       traefik.docker.network: ${LAB_NETWORK}
-      traefik.http.routers.lab-frontend.rule: ${LAB_FRONTEND_ROUTER_RULE:?set LAB_FRONTEND_ROUTER_RULE in deploy/.env}
+
+      traefik.http.routers.lab-frontend.rule: Host(`${LAB_HOSTNAME:?set LAB_HOSTNAME in deploy/.env}`)
       traefik.http.routers.lab-frontend.entrypoints: ${TRAEFIK_ENTRYPOINT:?set TRAEFIK_ENTRYPOINT in deploy/.env}
       traefik.http.routers.lab-frontend.tls.certresolver: ${TRAEFIK_CERTRESOLVER:?set TRAEFIK_CERTRESOLVER in deploy/.env}
       traefik.http.routers.lab-frontend.middlewares: ${TRAEFIK_AUTH_MIDDLEWARE:?set TRAEFIK_AUTH_MIDDLEWARE in deploy/.env}
+      traefik.http.routers.lab-frontend.service: lab-frontend
       traefik.http.services.lab-frontend.loadbalancer.server.port: "3000"
+
+      traefik.http.routers.lab-frontend-auth.rule: Host(`${LAB_HOSTNAME}`) && PathPrefix(`/outpost.goauthentik.io/`)
+      traefik.http.routers.lab-frontend-auth.priority: "100"
+      traefik.http.routers.lab-frontend-auth.entrypoints: ${TRAEFIK_ENTRYPOINT}
+      traefik.http.routers.lab-frontend-auth.tls.certresolver: ${TRAEFIK_CERTRESOLVER}
+      traefik.http.routers.lab-frontend-auth.service: ${TRAEFIK_AUTH_OUTPOST_SERVICE:?set TRAEFIK_AUTH_OUTPOST_SERVICE in deploy/.env}
