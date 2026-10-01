@@ -1,10 +1,11 @@
-# Lab orchestrator on the VPS (M8, architecture doc §17).
+# Lab orchestrator (M8) and web frontend (M9) on the VPS (architecture doc §17).
 #
 #   cp deploy/.env.example deploy/.env   # then edit
 #   docker compose --env-file deploy/.env up -d --build
 #
-# No published port and no traefik labels: the API is reachable only by
-# containers on the shared lab network (the web frontend).
+# Neither service publishes a port. The orchestrator has no traefik
+# labels: only containers on the shared lab network (the frontend) reach
+# it. The frontend is reachable only through traefik + authentik.
 
 name: lab-orchestrator
 
@@ -33,6 +34,31 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - lab
+
+  lab-frontend:
+    build: ./frontend
+    image: lab-frontend:${LAB_ORCH_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      LAB_FRONTEND_ORCHESTRATOR_URL: http://lab-orchestrator:8000
+      LAB_FRONTEND_USER_HEADER: ${LAB_FRONTEND_USER_HEADER:-X-authentik-username}
+      # LAB_FRONTEND_DEV_USER is deliberately never set here: in a
+      # deployment the identity must come from authentik via traefik.
+    # No published port: the identity header is only trustworthy because
+    # traefik (which overwrites it from authentik's response) is the only
+    # way in.
+    networks:
+      - lab
+    depends_on:
+      - lab-orchestrator
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${LAB_NETWORK}
+      traefik.http.routers.lab-frontend.rule: ${LAB_FRONTEND_ROUTER_RULE:?set LAB_FRONTEND_ROUTER_RULE in deploy/.env}
+      traefik.http.routers.lab-frontend.entrypoints: ${TRAEFIK_ENTRYPOINT:?set TRAEFIK_ENTRYPOINT in deploy/.env}
+      traefik.http.routers.lab-frontend.tls.certresolver: ${TRAEFIK_CERTRESOLVER:?set TRAEFIK_CERTRESOLVER in deploy/.env}
+      traefik.http.routers.lab-frontend.middlewares: ${TRAEFIK_AUTH_MIDDLEWARE:?set TRAEFIK_AUTH_MIDDLEWARE in deploy/.env}
+      traefik.http.services.lab-frontend.loadbalancer.server.port: "3000"
 
 volumes:
   orchestrator-data:

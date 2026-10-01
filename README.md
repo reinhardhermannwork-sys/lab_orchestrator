@@ -313,7 +313,13 @@ scope and which milestone fills it in.
       `GET /v1/instances?user=`, `DELETE /v1/instances/{id}?user=` (early
       release via the new `USER_RELEASED` event, owner-checked, the janitor
       removes the VM), plus `expires_at`/`failure_reason` in instance
-      responses. *Frontend itself:* not started.
+      responses, and an optional owner check (`?user=`) on
+      `GET /v1/instances/{id}`. *Frontend:* `frontend/` — React +
+      Tailwind (Vite) with a thin Fastify server that alone talks to the
+      orchestrator and takes `user` from `X-authentik-username`; its own
+      Dockerfile and a `lab-frontend` compose service with traefik labels.
+      Checked locally end-to-end; the done-when (traefik/authentik on the
+      VPS) is still open. See `frontend/README.md`.
 - [ ] M10 — Host wrapper & real tux2lab integration
 - [ ] M11 — Guacamole JSON-auth adapter
 - [ ] M12 — Guacamole tunnel-close listener *(separate Java project)*

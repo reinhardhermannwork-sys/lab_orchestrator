@@ -282,3 +282,19 @@ def test_release_by_other_user_or_unknown_id_is_404(fast_settings, reachable):
     assert other.json() == unknown.json()  # doesn't reveal that the id exists
     assert missing_user.status_code == 422
     assert state_after != "DESTROYING"
+
+
+def test_get_by_id_with_user_is_owner_checked(fast_settings, reachable):
+    from lab_orchestrator.main import create_app
+
+    with TestClient(create_app()) as client:
+        instance_id = client.post(
+            "/v1/instances", json={"user": "hermann", "machine_type": "machine_1"}
+        ).json()["instance_id"]
+        own = client.get(f"/v1/instances/{instance_id}", params={"user": "hermann"})
+        other = client.get(f"/v1/instances/{instance_id}", params={"user": "mallory"})
+        unfiltered = client.get(f"/v1/instances/{instance_id}")
+
+    assert own.status_code == 200
+    assert other.status_code == 404
+    assert unfiltered.status_code == 200  # M5 behavior without ?user=

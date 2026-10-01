@@ -253,7 +253,10 @@ Once Guacamole is integrated, the `READY` response drops raw SSH details in favo
 GET    /v1/machines                         → enabled machine types (machine_type, display_name)
 GET    /v1/instances?user=<name>            → that user's active leases (0 or 1)
 DELETE /v1/instances/{id}?user=<name>       → 202, early release; 404 unless <name> owns it
+GET    /v1/instances/{id}?user=<name>       → as before, but 404 unless <name> owns it
 ```
+
+The `?user=` on `GET /v1/instances/{id}` is optional (without it, the M5 behavior is unchanged); the frontend always sends it. It is needed because the frontend polls a lease by id: a lease that failed is `DESTROYED` and drops out of the user's active list, and polling by id is how the user still sees the failure reason.
 
 Early release adds one state-machine event, `USER_RELEASED`: from any pre-destroy state to `DESTROYING`, exactly like `LIFETIME_EXPIRED` (§6). The janitor then removes the VM as it does for an expired lease. The API itself stays unauthenticated and internal (§4, §17); the ownership check is defense in depth behind the frontend's own check.
 

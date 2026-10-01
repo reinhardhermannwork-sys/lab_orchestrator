@@ -538,6 +538,57 @@ list skipping disabled machines. Also against a real `uvicorn` process
 (fake backend, janitor every 2s): list → mine → 404 for another user →
 `202 DESTROYING` → janitor logs `DESTROYED` → my list is empty.
 
+## M9 part 2 — the web frontend
+
+`frontend/`: React + Tailwind client built with Vite, and a thin Fastify
+server (`server/app.ts`) that serves it and is the only path to the
+orchestrator. Node 24 runs the server's TypeScript directly (type
+stripping), so only the client has a build step. Own Dockerfile
+(multi-stage, `node:24-slim`, non-root) and a `lab-frontend` service in
+`compose.yaml`: no published port, traefik labels whose router rule,
+entrypoint, cert resolver, and authentik middleware come from `deploy/.env`
+(I don't know the names in the VPS's traefik setup).
+
+Screens: machine list → request → status with startup steps (polling every
+2s while changing, 15s when ready) → ready view with remaining time and
+"End session" → ended/failed view with the failure reason. The ready view
+shows `ssh user@ip` as a placeholder until M11 adds the Guacamole session.
+
+**Security boundary, as built:** `user` comes only from the identity
+header (validated; a duplicated header is refused); with no header the
+API answers 401 unless `LAB_FRONTEND_DEV_USER` is set (local dev only, never
+in compose). Request bodies are schema-checked and unknown fields are
+stripped, so a body can't choose the user. Instance ids must be ULIDs
+before anything is forwarded. There is no generic proxy. Orchestrator
+errors are mapped: 404 → 404, 400/409 → their message, anything else or
+unreachable → 502 with a generic message.
+
+**One more orchestrator change:** `GET /v1/instances/{id}` takes an optional
+`?user=` and answers 404 for someone else's lease. Needed because the
+frontend polls by id — a failed lease is `DESTROYED`, drops out of the
+user's active list, and polling by id is how the failure reason still
+reaches the user.
+
+**Judgment calls:**
+- `failure_reason` is shown to the user as-is. For a test deploy that's
+  useful; it can contain internal details (tux2lab command text), so it may
+  want a friendlier mapping before real users see it.
+- Node.js 24 LTS was installed user-locally on the dev VM
+  (`~/.local/node`, verified against nodejs.org's SHA-256 list), at the
+  human's choice.
+
+**Verified:** frontend — 31 tests (server boundary against a real stand-in
+orchestrator over HTTP, state helpers, App flows in jsdom), type-check
+clean, client builds. Orchestrator — 158 tests, `ruff` clean. End-to-end
+locally: orchestrator under `uvicorn` (fake backend) + the frontend server
+set up as in its image (production dependencies only, built client): page
+and client routes served; 401 without the header; a body claiming
+`"user":"mallory"` still created the lease for the header user (checked in
+the DB); mallory gets 404 on it; release → `DESTROYING` → `DESTROYED`;
+orchestrator down → 502. **Not verified:** the UI in a real browser (only
+jsdom), the Docker images, and the M9 done-when behind traefik/authentik
+on the VPS.
+
 ---
 
 ## Open questions still outstanding

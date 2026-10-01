@@ -135,10 +135,16 @@ async def list_instances(
 
 
 @router.get("/instances/{instance_id}", response_model=InstanceResponse)
-async def get_instance(instance_id: str, request: Request) -> InstanceResponse:
+async def get_instance(
+    instance_id: str, request: Request, user: str | None = Query(default=None, min_length=1)
+) -> InstanceResponse:
+    """With `user`, a lease owned by someone else is a 404 (the web
+    frontend always passes it); without, any lease -- the original M5
+    behavior, kept for operators and the curl workflow.
+    """
     app_state = request.app.state
     row = await instance_manager.get_instance(engine=app_state.db_engine, instance_id=instance_id)
-    if row is None:
+    if row is None or (user is not None and row["user_id"] != user):
         raise HTTPException(status_code=404, detail="instance not found")
     return _instance_response(row, app_state)
 

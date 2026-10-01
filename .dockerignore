@@ -22,3 +22,6 @@ secrets
 tests
 *.md
 !README.md
+
+# built separately (frontend/Dockerfile)
+frontend
