@@ -245,6 +245,30 @@ async def test_provision_instance_readiness_timeout_fails_cleanly(
     assert "readiness criteria not met" in row["failure_reason"]
 
 
+async def test_provision_instance_simulated_reachability_skips_tcp_probe(
+    engine, machines, settings, working_naming, monkeypatch
+):
+    # The deployed fake backend: its fake IP is unreachable (on the VPS it
+    # lies inside the real lab network), so the probe must not run at all.
+    async def _probe_must_not_run(host, port, timeout=3.0):
+        raise AssertionError("TCP probe ran for a simulated VM")
+
+    monkeypatch.setattr(instance_manager, "_tcp_port_open", _probe_must_not_run)
+    created = await instance_manager.create_instance(
+        engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
+    )
+    await instance_manager.provision_instance(
+        engine=engine,
+        machines=machines,
+        tux2lab=FakeTux2LabClient(simulated_reachability=True),
+        settings=settings,
+        instance_id=created["id"],
+    )
+    row = row_of(engine, created["id"])
+    assert row["state"] == InstanceState.READY.value
+    assert row["ready_at"] is not None
+
+
 async def test_provision_instance_removes_vm_on_failure_after_install(
     engine, machines, tux2lab, settings, working_naming
 ):

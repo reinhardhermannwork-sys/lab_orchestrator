@@ -74,7 +74,8 @@ other router may match those paths on every host (the VPS's dashboard router
 once did, with `|| PathPrefix(...)`, which broke every forward-auth login).
 
 - `LAB_ORCH_TUX2LAB_BACKEND=fake` for stage 1 (M8), `ssh` for stage 2
-  (M10, needs the host wrapper from `deploy/host/`).
+  (M10, needs the host wrapper from `deploy/host/`). The fake backend's
+  VMs skip the TCP/22 readiness probe; their fixed IP isn't a real host.
 - SQLite lives in the `orchestrator-data` volume at `/data`; it survives
   `docker compose down`/`up` (only `down -v` deletes it).
 - Exactly one uvicorn worker. Don't scale the service or add `--workers`.

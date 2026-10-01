@@ -356,7 +356,9 @@ async def provision_instance(
             deadline = time.monotonic() + settings.provisioning_timeout_seconds
             while True:
                 info = await tux2lab.info(hostname)
-                reachable = bool(info.ip_address) and await _tcp_port_open(info.ip_address, 22)
+                reachable = bool(info.ip_address) and (
+                    tux2lab.simulated_reachability or await _tcp_port_open(info.ip_address, 22)
+                )
                 if info.vm_state == "running" and info.os_state == "healthy" and reachable:
                     await _transition(
                         Event.READY_CRITERIA_MET, vm_ip=info.ip_address, ready_at=utcnow()

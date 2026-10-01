@@ -70,7 +70,7 @@ def make_tux2lab_client(settings: Settings) -> Tux2LabClient:
     """
     if settings.tux2lab_backend == "fake":
         logger.warning("using FakeTux2LabClient (LAB_ORCH_TUX2LAB_BACKEND=fake) -- no real VMs")
-        return FakeTux2LabClient()
+        return FakeTux2LabClient(simulated_reachability=True)
     if settings.tux2lab_backend == "ssh":
         return SSHTux2LabClient.from_settings(settings)
     try:
@@ -80,7 +80,7 @@ def make_tux2lab_client(settings: Settings) -> Tux2LabClient:
             "tux2lab SSH settings not configured (LAB_ORCH_TUX2LAB_SSH_*) — "
             "using FakeTux2LabClient. Fine for local dev, wrong for production."
         )
-        return FakeTux2LabClient()
+        return FakeTux2LabClient(simulated_reachability=True)
 
 
 @asynccontextmanager

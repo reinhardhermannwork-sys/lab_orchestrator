@@ -86,6 +86,9 @@ def test_backend_fake_ignores_ssh_settings(isolated_db, monkeypatch, tmp_path):
     app = create_app()
     with TestClient(app):
         assert isinstance(app.state.tux2lab, FakeTux2LabClient)
+        # A deployed fake backend's VMs exist nowhere on the network, so
+        # it must skip the TCP/22 probe (seen on the VPS: stuck at Booting).
+        assert app.state.tux2lab.simulated_reachability is True
 
 
 def test_invalid_backend_is_a_config_error(monkeypatch):

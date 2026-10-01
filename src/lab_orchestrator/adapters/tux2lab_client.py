@@ -157,6 +157,11 @@ class Tux2LabClient(ABC):
     validation so it's identical across every implementation.
     """
 
+    #: True only for a simulation whose VMs exist nowhere on the network:
+    #: the orchestrator then skips its own TCP/22 readiness probe
+    #: (instance_manager), which could never succeed against them.
+    simulated_reachability: bool = False
+
     async def install(self, hostname: str, image: str) -> None:
         _validate_hostname(hostname)
         _validate_image_name(image)
@@ -242,7 +247,14 @@ class FakeTux2LabClient(Tux2LabClient):
     develop against day to day, unblocked by real-host access.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, simulated_reachability: bool = False) -> None:
+        # False (tests' default): the fake IP below is probed for real and
+        # is unreachable, which tests use to exercise readiness timeouts.
+        # True (LAB_ORCH_TUX2LAB_BACKEND=fake deployments): the probe is
+        # skipped, so a simulated VM reaches READY wherever the container
+        # runs -- on the VPS 10.28.28.100 is inside the real lab network,
+        # which the container can't reach.
+        self.simulated_reachability = simulated_reachability
         self._vms: dict[str, VMInfo] = {}
         # Test hook: if set, the *next* _do_* call raises this once, then
         # clears itself. Used to simulate a timeout/ambiguous failure for

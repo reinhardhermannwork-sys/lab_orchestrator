@@ -682,8 +682,27 @@ works). `deploy/compose.traefik.yaml` therefore adds a second router for the
 lab hostname's `/outpost.goauthentik.io/` paths with priority 100, and the
 single `LAB_FRONTEND_ROUTER_RULE` setting became `LAB_HOSTNAME` (plus
 `TRAEFIK_AUTH_OUTPOST_SERVICE`). Checked: `docker compose config` on the test
-VM renders both routers as intended. **Not yet done:** the deploy itself and
-the M9 done-when checks.
+VM renders both routers as intended.
+
+Deployed on the VPS (`/opt/lab_orchestrator`, `git clone`, fake backend):
+both containers healthy; traefik shows `lab-frontend-auth` (priority 100)
+over `lab-frontend` (35); the outpost answers `/ping` with 204 through the
+lab hostname. Login through authentik works and the page shows the
+authentik username.
+
+**Found on the VPS, then fixed:** with the fake backend, leases never left
+`WAITING_READY` ("Booting"). The fake VM's IP, 10.28.28.100, was still probed
+on TCP/22 for real; on the VPS that address lies inside the real lab network,
+which the container can't reach (both test leases: `ready_at` NULL in the
+DB). On the test VM the probe happened to succeed, so it never showed. Fix:
+`Tux2LabClient.simulated_reachability` (default False);
+`make_tux2lab_client()` builds the fake backend with True, and
+`provision_instance` then skips the probe. Tests that rely on the
+unreachable fake IP keep the default. New tests for both sides; 159 pass.
+Seen meanwhile: `test_hostnames_do_not_collide_in_practice` is flaky by
+design (2000 draws from 32^5 names collide ~6% of the time), not changed.
+
+**Not yet done:** the M9 done-when checks.
 
 ## Open questions still outstanding
 
