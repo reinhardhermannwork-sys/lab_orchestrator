@@ -1,24 +1,24 @@
-"""Tests for the tux2lab adapter (M4 done-when criteria).
+"""Tests for the tux2lab adapter (M4 done-when criteria, M10 CLI dialect).
 
 The "shared contract" tests below run the *identical* async helper
 against both FakeTux2LabClient and SSHTux2LabClient — the latter talking
-to a real local SSH server standing in for the host-side wrapper — so
-"the fake client passes the same test suite as the real one" (the plan's
-own words) is demonstrated, not just asserted.
+to a real local SSH server — so "the fake client passes the same test
+suite as the real one" (the plan's own words) is demonstrated, not just
+asserted.
 
-The local wrapper server mirrors SSHTux2LabClient's *assumed* command
-syntax and output format (both flagged as unverified in
-adapters/tux2lab_client.py's module docstring). That means these tests
-genuinely verify the SSH mechanics — auth, command execution, timeout
-handling, error propagation — even though the wrapper's actual CLI
-dialect can't be confirmed without a real host.
+Behind that SSH server runs the real host wrapper
+(`deploy/host/lab-orchestrator-wrapper`) in front of the tux2lab stand-in
+(`deploy/host/stand-in/tux2lab`), which reproduces the real CLI's output.
+So these tests cover the whole chain: SSH mechanics, the wrapper's
+allowlist and image mapping, and the adapter's parsing of tux2lab's text.
+Only `sudo` is replaced by a shim that runs the command as the test user.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
-import shlex
+import os
+from pathlib import Path
 
 import asyncssh
 import pytest
@@ -33,81 +33,59 @@ from lab_orchestrator.adapters.tux2lab_client import (
     VMNotFoundError,
 )
 
-# --- local stand-in for the host-side wrapper ----------------------------
+# --- local stand-in for the host: wrapper + tux2lab stand-in -------------
+
+REPO = Path(__file__).resolve().parents[1]
+WRAPPER = REPO / "deploy" / "host" / "lab-orchestrator-wrapper"
+STAND_IN = REPO / "deploy" / "host" / "stand-in" / "tux2lab"
 
 
-class _FakeWrapperServer:
-    """Responds to exactly the command syntax SSHTux2LabClient sends,
-    with the JSON output format it expects — see the module docstring.
+class _WrapperHost:
+    """Runs each SSH request the way sshd's forced command would: the real
+    wrapper with SSH_ORIGINAL_COMMAND set, calling the tux2lab stand-in.
     """
 
-    def __init__(self) -> None:
-        self.vms: dict[str, dict] = {}
+    def __init__(self, workdir: Path) -> None:
         self.received_commands: list[str] = []
+        shim_dir = workdir / "bin"
+        shim_dir.mkdir()
+        sudo = shim_dir / "sudo"
+        # Drops "-n -H -u <user> --" and runs the rest as the test user.
+        sudo.write_text('#!/bin/bash\nwhile [[ "$1" != "--" ]]; do shift; done; shift; exec "$@"\n')
+        sudo.chmod(0o755)
+        images = workdir / "images.conf"
+        images.write_text("# image distro version\nimage-1 almalinux 10\nmy-image rocky 9\n")
+        conf = workdir / "wrapper.conf"
+        conf.write_text(f"TUX2LAB_USER=tester\nTUX2LAB_BIN={STAND_IN}\nIMAGES_CONF={images}\n")
+        self.env = {
+            **os.environ,
+            "PATH": f"{shim_dir}:{os.environ.get('PATH', '')}",
+            "LAB_ORCHESTRATOR_WRAPPER_CONF": str(conf),
+            "TUX2LAB_STANDIN_STATE": str(workdir / "state"),
+            "TUX2LAB_STANDIN_BOOT_SECONDS": "0",
+            "TUX2LAB_STANDIN_INSTALL_SECONDS": "0",
+        }
 
     async def handle(self, process) -> None:
         self.received_commands.append(process.command)
-        args = shlex.split(process.command)  # ["tux2lab", "vm", "install", "-H", ...]
-        op = tuple(args[1:3])
-        hostname = self._flag(args, "-H")
-
-        if op == ("vm", "install"):
-            if hostname == "trigger-timeout":
-                await asyncio.sleep(5)
-            image = self._flag(args, "-i")
-            if hostname in self.vms:
-                process.stderr.write("already exists")
-                process.exit(1)
-                return
-            self.vms[hostname] = {
-                "hostname": hostname,
-                "vm_state": "stopped",
-                "os_state": "unknown",
-                "ip_address": None,
-                "image": image,
-            }
-            process.exit(0)
-        elif op == ("vm", "list"):
-            process.stdout.write(json.dumps(list(self.vms.values())))
-            process.exit(0)
-        elif op == ("vm", "info"):
-            vm = self.vms.get(hostname)
-            if vm is None:
-                process.stderr.write(f"host not found: {hostname}")
-                process.exit(1)
-                return
-            process.stdout.write(json.dumps(vm))
-            process.exit(0)
-        elif op == ("vm", "start"):
-            vm = self.vms.get(hostname)
-            if vm is None:
-                process.stderr.write(f"host not found: {hostname}")
-                process.exit(1)
-                return
-            vm.update(vm_state="running", os_state="healthy", ip_address="10.28.28.100")
-            process.exit(0)
-        elif op == ("vm", "remove"):
-            if hostname not in self.vms:
-                process.stderr.write(f"host not found: {hostname}")
-                process.exit(1)
-                return
-            del self.vms[hostname]
-            process.exit(0)
-        else:
-            process.stderr.write("unknown command")
-            process.exit(2)
-
-    @staticmethod
-    def _flag(args: list[str], name: str) -> str | None:
-        try:
-            return args[args.index(name) + 1]
-        except ValueError:
-            return None
+        if "trigger-timeout" in process.command:
+            await asyncio.sleep(5)
+        proc = await asyncio.create_subprocess_exec(
+            str(WRAPPER),
+            env={**self.env, "SSH_ORIGINAL_COMMAND": process.command},
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        process.stdout.write(stdout.decode())
+        process.stderr.write(stderr.decode())
+        process.exit(proc.returncode)
 
 
 @pytest.fixture
 async def wrapper_server(tmp_path):
-    server_state = _FakeWrapperServer()
+    server_state = _WrapperHost(tmp_path)
 
     host_key = asyncssh.generate_private_key("ssh-ed25519")
     host_key_path = tmp_path / "host_key"
@@ -163,12 +141,14 @@ async def _assert_full_lifecycle_contract(client: Tux2LabClient) -> None:
 
     info = await client.info("test-host-1")
     assert info.hostname == "test-host-1"
-    assert info.vm_state == "stopped"
+    # The fake installs a stopped VM; the real CLI's install also starts it.
+    assert info.vm_state in ("stopped", "running")
 
     await client.start("test-host-1")
     info_after_start = await client.info("test-host-1")
     assert info_after_start.vm_state == "running"
     assert info_after_start.os_state == "healthy"
+    assert info_after_start.ip_address
 
     await client.remove("test-host-1")
     with pytest.raises(VMNotFoundError):
@@ -222,22 +202,59 @@ async def test_malicious_image_name_never_reaches_the_ssh_call(ssh_client, wrapp
 
 
 async def test_timeout_raises_tux2lab_timeout_error(ssh_client):
+    # start uses the general command timeout (1s here); install has its own.
     with pytest.raises(Tux2LabTimeoutError):
-        await ssh_client.install("trigger-timeout", "image-1")
+        await ssh_client.start("trigger-timeout")
 
 
-async def test_command_error_carries_exit_status_and_stderr(ssh_client):
+async def test_command_error_carries_tux2lab_error_from_stdout(ssh_client):
+    # tux2lab prints errors to stdout; the message must carry them.
     await ssh_client.install("dup-host", "image-1")
     with pytest.raises(Tux2LabCommandError) as exc_info:
         await ssh_client.install("dup-host", "image-1")
     assert exc_info.value.exit_status == 1
-    assert "already exists" in exc_info.value.stderr
+    assert 'VM "dup-host.lab.internal" exists already.' in str(exc_info.value)
+
+
+async def test_wrapper_refusal_surfaces_as_command_error(ssh_client):
+    with pytest.raises(Tux2LabCommandError) as exc_info:
+        await ssh_client.install("some-host", "image-not-in-map")
+    assert exc_info.value.exit_status == 126
+    assert "image not in map" in str(exc_info.value)
+
+
+async def test_remove_of_unknown_vm_raises_not_found(ssh_client):
+    # The real CLI exits 0 here; the adapter keeps the base contract.
+    with pytest.raises(VMNotFoundError):
+        await ssh_client.remove("never-created")
+
+
+async def test_install_uses_the_longer_install_timeout(wrapper_server):
+    _server_state, port, client_key_path = wrapper_server
+    client = SSHTux2LabClient(
+        host="127.0.0.1",
+        port=port,
+        username="orchestrator",
+        client_keys=[client_key_path],
+        known_hosts=None,
+        command_timeout=0.1,
+        install_timeout=10.0,
+    )
+    try:
+        await client.install("slow-ok-host", "image-1")  # well over 0.1s through bash
+    finally:
+        await client.close()
 
 
 async def test_ssh_client_sends_expected_command_syntax(ssh_client, wrapper_server):
     server_state, _port, _key = wrapper_server
     await ssh_client.install("my-host", "my-image")
-    assert server_state.received_commands == ["tux2lab vm install -H my-host -i my-image"]
+    await ssh_client.info("my-host")
+    assert server_state.received_commands == [
+        "tux2lab vm install -H my-host -i my-image",
+        "tux2lab vm list",
+        "tux2lab vm info -H my-host",
+    ]
 
 
 # --- idempotent retry helpers (architecture doc §14.4) ---------------------

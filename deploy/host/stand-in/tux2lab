@@ -1,0 +1,382 @@
+#!/usr/bin/env bash
+# Stand-in for the tux2lab CLI -- TEST USE ONLY, never on a real lab host.
+#
+# Implements the five commands the orchestrator uses (vm install/list/info/
+# start/remove) with the real CLI's output: the same ANSI colors, table and
+# tree layout, messages and exit codes, copied from the tux2lab source
+# (github.com/Muthukumar-Subramaniam/tux2lab @ 0d0c7dc, scripts-to-manage-vms/
+# kvm-{install-golden,list,info,start,remove}.sh). It lets the host wrapper,
+# the SSH setup and the orchestrator's parsers be exercised on a machine that
+# can't run tux2lab itself. Real-host behavior still has to be confirmed on
+# the VPS (implementation plan M10).
+#
+# Simulated behavior, matching the real CLI:
+#   - refuses to run as root
+#   - bare hostnames are expanded to <name>.<domain>; VMs are listed by FQDN
+#   - `vm install` also starts the VM; it is "running" with OS state
+#     "SSH-Not-Ready" until the boot delay passes, then "healthy"
+#   - `vm info -H` on an unknown VM prints "State: unknown" and exits 0
+#   - `vm start` on a running VM exits 0 ("already running")
+#   - `vm remove` on an unknown VM exits 0 ("does not exist")
+#   - a missing -d/-v (install) or -f (remove) reaches an interactive prompt,
+#     which loops forever on a closed stdin, like the real `read` loops
+#
+# Settings (environment):
+#   TUX2LAB_STANDIN_STATE           state directory (default /var/lib/tux2lab-standin)
+#   TUX2LAB_STANDIN_DOMAIN          lab domain (default lab.internal)
+#   TUX2LAB_STANDIN_IP              IPv4 every VM gets (default 10.28.28.100)
+#   TUX2LAB_STANDIN_BOOT_SECONDS    install → healthy delay (default 20)
+#   TUX2LAB_STANDIN_INSTALL_SECONDS how long install takes (default 3)
+#   TUX2LAB_STANDIN_IMAGES          installable "<distro>:<version>" list
+#                                   (default "almalinux:10 rocky:9 ubuntu-lts:24.04")
+set -euo pipefail
+
+state_dir="${TUX2LAB_STANDIN_STATE:-/var/lib/tux2lab-standin}"
+domain="${TUX2LAB_STANDIN_DOMAIN:-lab.internal}"
+vm_ip="${TUX2LAB_STANDIN_IP:-10.28.28.100}"
+boot_seconds="${TUX2LAB_STANDIN_BOOT_SECONDS:-20}"
+install_seconds="${TUX2LAB_STANDIN_INSTALL_SECONDS:-3}"
+images="${TUX2LAB_STANDIN_IMAGES:-almalinux:10 rocky:9 ubuntu-lts:24.04}"
+
+# --- tux2lab's common-utils/color-functions.sh ------------------------------
+MAKE_IT_RED='\033[0;31m'
+MAKE_IT_GREEN='\033[0;32m'
+MAKE_IT_YELLOW='\033[0;33m'
+MAKE_IT_CYAN='\033[0;36m'
+MAKE_IT_WHITE='\033[0;37m'
+MAKE_IT_MAGENTA='\033[0;35m'
+RESET_COLOR='\033[0m'
+print_error()     { echo -e "${MAKE_IT_RED}[ERROR] ${1}${RESET_COLOR}"; }
+print_success()   { echo -e "${MAKE_IT_GREEN}[SUCCESS] ${1}${RESET_COLOR}"; }
+print_warning()   { echo -e "${MAKE_IT_YELLOW}[WARN] ${1}${RESET_COLOR}"; }
+print_info()      { echo -e "${MAKE_IT_MAGENTA}[INFO] ${1}${RESET_COLOR}"; }
+print_task()      { echo -ne "${MAKE_IT_CYAN}[TASK] ${1}${RESET_COLOR}"; }
+print_task_done() { echo -e " ${MAKE_IT_GREEN}[DONE]${RESET_COLOR}"; }
+print_task_fail() { echo -e " ${MAKE_IT_RED}[FAIL]${RESET_COLOR}"; }
+print_task_skip() { echo -e " ${MAKE_IT_YELLOW}[SKIP]${RESET_COLOR}"; }
+print_green()     { echo -e "${MAKE_IT_GREEN}${1}${RESET_COLOR}"; }
+print_yellow()    { echo -e "${MAKE_IT_YELLOW}${1}${RESET_COLOR}"; }
+print_red()       { echo -e "${MAKE_IT_RED}${1}${RESET_COLOR}"; }
+print_cyan()      { echo -e "${MAKE_IT_CYAN}${1}${RESET_COLOR}"; }
+
+if [[ "$EUID" -eq 0 ]]; then
+    print_error "Running as root user is not allowed."
+    print_info "This script should be run as a user with sudo privileges, not as root."
+    exit 1
+fi
+
+mkdir -p "$state_dir"
+
+# A VM is one file: "<created-epoch> <power>" with power "running" or "shut".
+vm_file() { echo "$state_dir/$1"; }
+vm_exists() { [[ -f "$(vm_file "$1")" ]]; }
+vm_power() { awk '{print $2}' "$(vm_file "$1")"; }
+vm_booted() {
+    local created
+    created=$(awk '{print $1}' "$(vm_file "$1")")
+    (( $(date +%s) - created >= boot_seconds ))
+}
+
+# The interactive prompts loop on `read` failures; with a closed stdin this
+# never ends, which is what the orchestrator's timeout has to cut off.
+hang_at_prompt() {
+    echo -ne "${MAKE_IT_CYAN}${1}${RESET_COLOR}"
+    while true; do
+        read -r _ </dev/null || true
+        sleep 1
+    done
+}
+
+# tux2lab's validate_and_process_hostnames: expand to FQDN, reject the rest.
+normalize_host() {
+    local name="${1// /}"
+    if [[ "$name" == *."$domain" ]]; then
+        local stripped="${name%."$domain"}"
+        if [[ "$stripped" == *.* || ! "$stripped" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+            return 1
+        fi
+        echo "$name"
+    elif [[ "$name" == *.* || ! "$name" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+        return 1
+    else
+        echo "$name.$domain"
+    fi
+}
+
+invalid_host() {
+    print_error "Invalid hostname(s) found:"
+    print_error "  - $1"
+    print_info "Hostnames must contain only lowercase letters, numbers, and hyphens."
+    print_info "Domain must be '${domain}' or omitted (will be appended automatically)."
+    exit 1
+}
+
+# --- vm list (kvm-list.sh) --------------------------------------------------
+cmd_list() {
+    if [[ "$#" -ne 0 ]]; then
+        print_error "'tux2lab vm list' does not take any arguments."
+        exit 1
+    fi
+    local COLOR_GREEN=$'\033[0;32m' COLOR_YELLOW=$'\033[0;33m' COLOR_RED=$'\033[0;31m' COLOR_RESET=$'\033[0m'
+    local -a rows=()
+    local vm power os distro color
+    for f in "$state_dir"/*; do
+        [[ -f "$f" ]] || continue
+        vm=$(basename "$f")
+        power=$(vm_power "$vm")
+        os="[ N/A ]"; distro="[ N/A ]"
+        if [[ "$power" == "running" ]]; then
+            if vm_booted "$vm"; then
+                os="running"; distro="AlmaLinux 10.0 (Purple Lion)"
+            else
+                os="SSH-Not-Ready"
+            fi
+        fi
+        case "$os" in
+            running) os="healthy"; color="$COLOR_GREEN" ;;
+            "[ N/A ]") color="$COLOR_RED" ;;
+            *) color="$COLOR_YELLOW" ;;
+        esac
+        rows+=("${color}|${vm}|${power}|${os}|${distro}")
+    done
+    local max_vm=8 max_vmstate=8 max_osstate=8 max_osdistro=9 c
+    for row in "${rows[@]}"; do
+        IFS='|' read -r c vm power os distro <<< "$row"
+        (( ${#vm} > max_vm )) && max_vm=${#vm}
+        (( ${#power} > max_vmstate )) && max_vmstate=${#power}
+        (( ${#os} > max_osstate )) && max_osstate=${#os}
+        (( ${#distro} > max_osdistro )) && max_osdistro=${#distro}
+    done
+    printf "%-${max_vm}s %-${max_vmstate}s %-${max_osstate}s %-${max_osdistro}s\n" \
+        "VM-Name" "VM-State" "OS-State" "OS-Distro"
+    printf -- '-%.0s' $(seq 1 $((max_vm + max_vmstate + max_osstate + max_osdistro + 3)))
+    echo
+    # running first, then by name (the real sort)
+    for row in $(for i in "${!rows[@]}"; do
+            IFS='|' read -r c vm power _ <<< "${rows[$i]}"
+            [[ "$power" == "running" ]] && w=1 || w=2
+            printf "%d %s %s\n" "$w" "$vm" "$i"
+        done | sort -k1,1n -k2,2 | awk '{print $3}'); do
+        IFS='|' read -r c vm power os distro <<< "${rows[$row]}"
+        printf "%s%-${max_vm}s %- ${max_vmstate}s %- ${max_osstate}s %- ${max_osdistro}s%s\n" \
+            "$c" "$vm" "$power" "$os" "$distro" "$COLOR_RESET"
+    done
+}
+
+# --- vm info (kvm-info.sh) --------------------------------------------------
+cmd_info() {
+    local hosts=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -H|--hosts)
+                shift
+                if [[ -z "${1:-}" ]]; then
+                    print_error "Option -H/--hosts requires a comma-separated list of hostnames"
+                    exit 1
+                fi
+                hosts="$1"; shift ;;
+            -*) print_error "Unknown option: $1"; exit 1 ;;
+            *) print_error "Unexpected argument: $1"; print_info "Use -H/--hosts to specify hostname(s)."; exit 1 ;;
+        esac
+    done
+    local -a targets=()
+    if [[ -n "$hosts" ]]; then
+        IFS=',' read -ra arr <<< "$hosts"
+        for h in "${arr[@]}"; do
+            targets+=("$(normalize_host "$h")") || invalid_host "$h"
+        done
+    else
+        for f in "$state_dir"/*; do [[ -f "$f" ]] && targets+=("$(basename "$f")"); done
+        if [[ ${#targets[@]} -eq 0 ]]; then
+            print_warning "No VMs found"
+            exit 0
+        fi
+    fi
+    print_task "Gathering VM information..."
+    echo
+    local vm state
+    for vm in "${targets[@]}"; do
+        if vm_exists "$vm"; then
+            state=$(vm_power "$vm")
+            [[ "$state" == "shut" ]] && state="shut off"
+        else
+            state="unknown"  # `virsh domstate` failed
+        fi
+        if [[ "$state" != "running" ]]; then
+            print_yellow "$vm"
+            printf "└── $(print_yellow "State:") %s\n" "$state"
+            echo
+            continue
+        fi
+        if ! vm_booted "$vm"; then
+            print_yellow "$vm"
+            printf "└── $(print_yellow "State:") %s\n" "$state (SSH not accessible)"
+            echo
+            continue
+        fi
+        print_green "$vm"
+        printf "├── $(print_cyan "OS:") %s\n" "AlmaLinux 10.0 (Purple Lion)"
+        printf "├── $(print_cyan "Birthdate:") %s\n" "$(date -d "@$(awk '{print $1}' "$(vm_file "$vm")")" '+%Y-%m-%d %H:%M:%S')"
+        printf "├── $(print_cyan "Uptime:") %s  │  $(print_cyan "Load:") %s\n" "up 1 minute" "0.12, 0.05, 0.01"
+        printf "├── $(print_cyan "Resources")\n"
+        printf "│   ├── CPU: %s cores\n" "2"
+        printf "│   ├── Memory: %s MB allocated  │  %s MB used / %s MB total\n" "2048" "412" "1734"
+        printf "│   └── Root FS: %s total  │  %s used (%s)  │  %s available\n" "30G" "2.1G" "8%" "28G"
+        printf "├── $(print_cyan "Network")\n"
+        printf "│   ├── NICs\n"
+        printf "│   │   └── %s - %s\n" "eth0" "52:54:00:3a:1c:7e"
+        printf "│   ├── IPv4\n"
+        printf "│   │   ├── %s\n" "${vm_ip}/22"
+        printf "│   │   └── Gateway: %s\n" "10.28.28.1"
+        printf "│   └── IPv6\n"
+        printf "│       ├── %s\n" "fd28:2808:2020:3000::64/64"
+        printf "│       └── Gateway: %s\n" "fe80::1"
+        printf "└── $(print_cyan "Storage")\n"
+        printf "    └── /dev/%-4s %s\n" "vda" "30G"
+        echo
+    done
+}
+
+# --- -H handling shared by install/start/remove (single host only) ----------
+single_host() {
+    local value="$1"
+    if [[ "$value" == *,* ]]; then
+        print_error "The stand-in supports a single -H hostname only."
+        exit 1
+    fi
+    normalize_host "$value" || invalid_host "$value"
+}
+
+# --- vm start (kvm-start.sh) ------------------------------------------------
+cmd_start() {
+    local host=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -H|--hosts) shift; host="${1:-}"; shift || true ;;
+            *) print_error "Unknown option: $1"; exit 1 ;;
+        esac
+    done
+    [[ -n "$host" ]] || hang_at_prompt "Enter the hostname of the VM: "
+    local vm
+    vm=$(single_host "$host")
+    print_task "Starting VM..."
+    if ! vm_exists "$vm"; then
+        print_task_fail
+        print_error "VM does not exist"
+        exit 1
+    fi
+    if [[ "$(vm_power "$vm")" == "running" ]]; then
+        print_task_skip
+        print_info "VM is already running"
+        exit 0
+    fi
+    echo "$(date +%s) running" > "$(vm_file "$vm")"
+    print_task_done
+    exit 0
+}
+
+# --- vm remove (kvm-remove.sh) ----------------------------------------------
+cmd_remove() {
+    local host="" force=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -H|--hosts) shift; host="${1:-}"; shift || true ;;
+            -f|--force) force=true; shift ;;
+            *) print_error "Unknown option: $1"; exit 1 ;;
+        esac
+    done
+    [[ -n "$host" ]] || hang_at_prompt "Enter the hostname of the VM: "
+    local vm
+    vm=$(single_host "$host")
+    print_task "Checking if VM exists..."
+    if ! vm_exists "$vm"; then
+        print_task_skip
+        print_info "VM \"$vm\" does not exist."
+        exit 0
+    fi
+    print_task_done
+    if [[ "$force" != true ]]; then
+        print_warning "This will permanently delete VM \"$vm\" and all associated files!"
+        hang_at_prompt "Are you sure you want to continue? (yes/no): "
+    fi
+    if [[ "$(vm_power "$vm")" == "running" ]]; then
+        print_task "Stopping VM..."
+        print_task_done
+    fi
+    print_task "Undefining VM from libvirt..."
+    rm -f "$(vm_file "$vm")"
+    print_task_done
+    print_task "Removing VM directory..."
+    print_task_done
+    print_task "Removing from /etc/hosts..."
+    print_task_done
+    print_info "Removing host '$vm' from all ksmanager databases..."
+    print_success "VM '$vm' removed successfully."
+    exit 0
+}
+
+# --- vm install, golden image path (kvm-install-golden.sh) ------------------
+cmd_install() {
+    local host="" distro="" version=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -H) shift; host="${1:-}"; shift || true ;;
+            -d) shift; distro="${1:-}"; shift || true ;;
+            -v) shift; version="${1:-}"; shift || true ;;
+            --via-golden) shift ;;
+            *) print_error "Unknown option: $1"; exit 1 ;;
+        esac
+    done
+    [[ -n "$host" ]] || hang_at_prompt "Enter the hostname of the VM: "
+    if [[ -z "$distro" || -z "$version" ]]; then
+        print_info "Available golden images:"
+        hang_at_prompt "Select a golden image [1-3]: "
+    fi
+    if [[ " $images " != *" ${distro}:${version} "* ]]; then
+        print_error "Golden image not found: ${distro}-${version//\./-}-golden-image.${domain}.qcow2"
+        print_info "Build one first: tux2lab golden-image build ${distro} -v ${version}"
+        exit 1
+    fi
+    print_info "Using golden image: ${distro} ${version}"
+    local vm
+    vm=$(single_host "$host")
+    if vm_exists "$vm"; then
+        print_error "VM \"$vm\" exists already."
+        print_warning "Either do one of the following:"
+        print_info "Remove the VM using 'tux2lab vm remove', then try again."
+        print_info "Re-image the VM using 'tux2lab vm reimage -H ${vm}'."
+        exit 1
+    fi
+    print_task "Generating MAC address..."
+    print_task_done
+    print_info "Creating first boot environment via ksmanager..."
+    print_task "Updating /etc/hosts..."
+    print_task_done
+    print_task "Cloning golden image disk..."
+    sleep "$install_seconds"
+    print_task_done
+    # The VM is defined and started at the end of the install.
+    echo "$(date +%s) running" > "$(vm_file "$vm")"
+    print_info "VM specs: 2 vCPUs, 2 GiB RAM, 30 GiB disk"
+    print_green "Installation of \"${vm}\" initiated successfully."
+    print_yellow "    ▸ The VM will be ready in about a minute."
+    print_yellow "    ▸ To check VM status:  tux2lab vm list"
+    exit 0
+}
+
+# --- dispatch (tux2lab.sh → vm.sh) ------------------------------------------
+if [[ "${1:-}" != "vm" ]]; then
+    print_error "The stand-in only implements 'tux2lab vm <install|list|info|start|remove>'."
+    exit 1
+fi
+shift
+sub="${1:-}"
+shift || true
+case "$sub" in
+    list) cmd_list "$@" ;;
+    info) cmd_info "$@" ;;
+    start) cmd_start "$@" ;;
+    remove) cmd_remove "$@" ;;
+    install) cmd_install "$@" ;;
+    *) print_error "Invalid subcommand: '${sub}'"; exit 1 ;;
+esac

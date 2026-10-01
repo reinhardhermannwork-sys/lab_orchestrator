@@ -1,0 +1,4 @@
+[0;36m[TASK] Gathering VM information...[0m
+[0;33mgolden-ref-alma10.hermann.internal[0m
+└── [0;33mState:[0m shut off
+

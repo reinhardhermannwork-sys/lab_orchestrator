@@ -20,29 +20,29 @@ Two more things live on the base class, built on top of the public
   mutating call into a double-provision. instance_manager.py (M5) should
   call these, not the raw `install`/`remove`, for exactly this reason.
 
-**Real-host assumptions.** `SSHTux2LabClient` has to guess at two things
-the architecture doc doesn't specify, because the host-side wrapper
-doesn't exist yet for this codebase to inspect. Both are called out again
-on that class, but worth flagging here too:
+**Real CLI dialect (M10).** `SSHTux2LabClient` speaks the host wrapper's
+syntax (`deploy/host/lab-orchestrator-wrapper`): tux2lab's own
+`vm <cmd> -H <hostname>`, plus `-i <image>` on install, which the wrapper
+maps to `-d/-v`. tux2lab prints ANSI-colored text, not JSON, and its errors
+go to stdout. Decided (architecture doc §11):
 
-1. The wrapper's exact command syntax (assumed to mirror tux2lab's own
-   CLI, `-H <hostname>` etc., since that's the only syntax documented).
-2. `vm list`/`vm info`'s output format (assumed JSON) and how a
-   "VM not found" condition is signaled (a stderr-text heuristic, since
-   there's no documented distinct signal).
+1. `info()` reads `vm list` for the power and OS state, and `vm info -H`
+   for the IPv4 address once the VM is running and healthy. `vm info -H`
+   alone has no OS state.
+2. "Not found" means the hostname is missing from `vm list`. (`vm info -H`
+   on an unknown VM prints "State: unknown" and exits 0.)
+3. The wrapper passes output through untouched; command errors are read
+   from stdout's `[ERROR]` lines plus the exit code.
 
-Neither assumption is exercised by `FakeTux2LabClient`, which is what
-M5/M6 develop against day to day per the implementation plan. Both are
-covered by `tests/test_tux2lab_client.py` against a real local SSH
-server standing in for the wrapper — so the SSH *mechanics* (auth,
-command execution, timeout/error handling) are genuinely verified, only
-the wrapper's specific CLI dialect remains unverified pending real-host
-access.
+tux2lab names VMs by FQDN; everything returned here uses the short label
+the orchestrator stores (the part before the first dot). The parsers were
+written against tux2lab's source and are exercised against
+`deploy/host/stand-in/tux2lab`, which reproduces its output; fixtures
+captured on the real host are still to come (implementation plan M10).
 """
 
 from __future__ import annotations
 
-import json
 import re
 import shlex
 from abc import ABC, abstractmethod
@@ -310,35 +310,56 @@ class FakeTux2LabClient(Tux2LabClient):
 # checking entirely — a real security downgrade, never the default here).
 _UNSET = object()
 
-_NOT_FOUND_STDERR_PATTERNS = ("not found", "does not exist", "no such", "unknown host")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+# A `vm list` row after ANSI stripping: FQDN, VM-State (virsh's first word:
+# "running", "shut", "paused", ... or "[ N/A ]"), OS-State ("healthy",
+# "SSH-Not-Ready", a systemctl state, or "[ N/A ]"), then the free-text distro.
+_VM_LIST_ROW_RE = re.compile(r"^(\S+)\s+(\[ N/A \]|\S+)\s+(\[ N/A \]|\S+)(?:\s+.*)?$")
+
+# An address line under "IPv4" in `vm info -H`'s tree: "a.b.c.d/prefix". The
+# gateway line has no prefix length, so it never matches.
+_IPV4_WITH_PREFIX_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})/\d{1,2}\b")
 
 
-def _parse_vm_list_json(raw: str) -> list[VM]:
-    """ASSUMED format (unverified — see module docstring): a JSON array
-    of objects with "hostname" and "vm_state" keys.
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
+
+def _short_label(fqdn: str) -> str:
+    """`lab-m01-aurora-7k4m2.hermann.internal` -> `lab-m01-aurora-7k4m2`."""
+    return fqdn.split(".", 1)[0]
+
+
+def _parse_vm_list(raw: str) -> list[tuple[str, str, str]]:
+    """`vm list`'s table -> [(short label, vm_state, os_state)]. "shut"
+    (virsh's "shut off", cut at the space) is reported as "shut off".
     """
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise Tux2LabCommandError(f"could not parse 'vm list' output as JSON: {exc}") from exc
-    return [VM(hostname=entry["hostname"], vm_state=entry["vm_state"]) for entry in data]
+    rows: list[tuple[str, str, str]] = []
+    for line in _strip_ansi(raw).splitlines():
+        line = line.rstrip()
+        if not line or line.startswith("VM-Name") or set(line) == {"-"}:
+            continue
+        match = _VM_LIST_ROW_RE.match(line)
+        if match is None:
+            raise Tux2LabCommandError(f"unexpected line in 'vm list' output: {line!r}")
+        fqdn, vm_state, os_state = match.groups()
+        rows.append((_short_label(fqdn), "shut off" if vm_state == "shut" else vm_state, os_state))
+    return rows
 
 
-def _parse_vm_info_json(raw: str) -> VMInfo:
-    """ASSUMED format (unverified — see module docstring): a single JSON
-    object with "hostname", "vm_state", "os_state", and nullable
-    "ip_address" keys.
+def _parse_vm_info_ipv4(raw: str) -> str | None:
+    """First IPv4 address in `vm info -H`'s tree, without its prefix length;
+    None when the tree has none (VM not running, or SSH not accessible).
     """
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise Tux2LabCommandError(f"could not parse 'vm info' output as JSON: {exc}") from exc
-    return VMInfo(
-        hostname=data["hostname"],
-        vm_state=data["vm_state"],
-        os_state=data["os_state"],
-        ip_address=data.get("ip_address"),
-    )
+    match = _IPV4_WITH_PREFIX_RE.search(_strip_ansi(raw))
+    return match.group(1) if match else None
+
+
+def _error_lines(stdout: str) -> str:
+    """tux2lab's `[ERROR] ...` lines (it prints errors to stdout)."""
+    lines = [line.strip() for line in _strip_ansi(stdout).splitlines()]
+    return " ".join(line for line in lines if line.startswith("[ERROR]"))
 
 
 class SSHTux2LabClient(Tux2LabClient):
@@ -356,6 +377,7 @@ class SSHTux2LabClient(Tux2LabClient):
         client_keys: list[str],
         known_hosts: object = _UNSET,
         command_timeout: float = 30.0,
+        install_timeout: float = 600.0,
     ) -> None:
         self._host = host
         self._port = port
@@ -363,6 +385,7 @@ class SSHTux2LabClient(Tux2LabClient):
         self._client_keys = client_keys
         self._known_hosts = known_hosts
         self._command_timeout = command_timeout
+        self._install_timeout = install_timeout
         self._conn: asyncssh.SSHClientConnection | None = None
 
     @classmethod
@@ -391,6 +414,7 @@ class SSHTux2LabClient(Tux2LabClient):
             client_keys=[str(settings.tux2lab_ssh_key_path)],
             known_hosts=known_hosts,
             command_timeout=settings.tux2lab_ssh_command_timeout,
+            install_timeout=settings.tux2lab_ssh_install_timeout,
         )
 
     async def _connection(self) -> asyncssh.SSHClientConnection:
@@ -416,63 +440,70 @@ class SSHTux2LabClient(Tux2LabClient):
             self._conn.close()
             await self._conn.wait_closed()
 
-    async def _run(self, *args: str) -> str:
+    async def _run(self, *args: str, timeout: float | None = None) -> str:
         """Run `tux2lab <args...>` over the wrapper connection. `args`
         must already be validated/quoted by the caller. Returns stdout on
-        exit_status 0; raises Tux2LabCommandError otherwise.
+        exit_status 0; raises Tux2LabCommandError otherwise, with
+        tux2lab's own `[ERROR]` lines (from stdout) or the wrapper's
+        refusal (from stderr) in the message.
         """
         import asyncssh
 
         conn = await self._connection()
         command = " ".join(["tux2lab", *args])
         try:
-            result = await conn.run(command, check=False, timeout=self._command_timeout)
+            result = await conn.run(command, check=False, timeout=timeout or self._command_timeout)
         except asyncssh.TimeoutError as exc:
             raise Tux2LabTimeoutError(command) from exc
         except asyncssh.Error as exc:
             raise Tux2LabConnectionError(str(exc)) from exc
+        stdout = str(result.stdout or "")
         if result.exit_status != 0:
+            stderr = str(result.stderr or "")
+            detail = _error_lines(stdout) or stderr.strip()
             raise Tux2LabCommandError(
-                f"'{command}' exited {result.exit_status}",
+                f"'{command}' exited {result.exit_status}" + (f": {detail}" if detail else ""),
                 exit_status=result.exit_status,
-                stderr=str(result.stderr or ""),
+                stderr=stderr,
             )
-        return str(result.stdout or "")
+        return stdout
 
-    # --- ASSUMPTION: wrapper mirrors tux2lab's own CLI syntax exactly,
-    # `-H <hostname>` per §11's info/start/remove examples; install's
-    # flags are elided with "..." in the doc, so `-H`/`-i` here is this
-    # module's own extrapolation of that convention. shlex.quote() is a
-    # second, independent safety layer on top of the charset validation
-    # already done by the base class's public methods — not a substitute
-    # for it.
+    # Command syntax is the wrapper's (deploy/host/lab-orchestrator-wrapper).
+    # shlex.quote() is a second, independent safety layer on top of the
+    # charset validation already done by the base class's public methods —
+    # not a substitute for it.
 
     async def _do_install(self, hostname: str, image: str) -> None:
-        await self._run("vm", "install", "-H", shlex.quote(hostname), "-i", shlex.quote(image))
+        # Cloning a golden image can outlast the general command timeout.
+        await self._run(
+            "vm", "install", "-H", shlex.quote(hostname), "-i", shlex.quote(image),
+            timeout=self._install_timeout,
+        )
 
     async def _do_list(self) -> list[VM]:
-        raw = await self._run("vm", "list")
-        return _parse_vm_list_json(raw)
+        rows = _parse_vm_list(await self._run("vm", "list"))
+        return [VM(hostname=name, vm_state=vm_state) for name, vm_state, _os in rows]
 
     async def _do_info(self, hostname: str) -> VMInfo:
-        try:
-            raw = await self._run("vm", "info", "-H", shlex.quote(hostname))
-        except Tux2LabCommandError as exc:
-            # Best-effort heuristic on stderr text — there's no documented
-            # distinct signal for "not found" vs. any other command
-            # failure. A stderr that doesn't match propagates as
-            # Tux2LabCommandError, not VMNotFoundError: install_idempotent/
-            # remove_idempotent's retry-safety may not reliably detect
-            # "gone"/"not yet created" against a real host until this is
-            # confirmed against the actual wrapper. Fully reliable against
-            # FakeTux2LabClient today.
-            if any(pattern in exc.stderr.lower() for pattern in _NOT_FOUND_STDERR_PATTERNS):
-                raise VMNotFoundError(hostname) from exc
-            raise
-        return _parse_vm_info_json(raw)
+        rows = _parse_vm_list(await self._run("vm", "list"))
+        for name, vm_state, os_state in rows:
+            if name == hostname:
+                break
+        else:
+            raise VMNotFoundError(hostname)
+        ip_address = None
+        if vm_state == "running" and os_state == "healthy":
+            ip_address = _parse_vm_info_ipv4(await self._run("vm", "info", "-H", shlex.quote(hostname)))
+        return VMInfo(hostname=hostname, vm_state=vm_state, os_state=os_state, ip_address=ip_address)
 
     async def _do_start(self, hostname: str) -> None:
+        # Exits 0 with "VM is already running" after install, which also
+        # starts the VM; that is the normal path here.
         await self._run("vm", "start", "-H", shlex.quote(hostname))
 
     async def _do_remove(self, hostname: str) -> None:
+        # The wrapper adds -f. An unknown VM exits 0 ("does not exist"), so
+        # check first to keep the base contract (VMNotFoundError).
+        if not any(vm.hostname == hostname for vm in await self._do_list()):
+            raise VMNotFoundError(hostname)
         await self._run("vm", "remove", "-H", shlex.quote(hostname))

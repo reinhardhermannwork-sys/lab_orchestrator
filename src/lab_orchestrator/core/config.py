@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     # adapters/tux2lab_client.py's SSHTux2LabClient.from_settings() for why
     # that distinction matters and how it's preserved.
     tux2lab_ssh_command_timeout: float = 30.0
+    # `vm install` clones a golden image disk and can run for minutes (M10).
+    tux2lab_ssh_install_timeout: float = 600.0
 
     # Which Tux2LabClient main.py wires in (M8). "auto" keeps the local-dev
     # behavior: the real client if the SSH settings above are set, otherwise

@@ -1,0 +1,10 @@
+# /etc/lab-orchestrator/images.conf — interim image map (architecture doc §3,
+# §11). tux2lab can't install a named golden image yet; the wrapper turns
+# `-i <image>` into `-d <distro> -v <version>` with this table.
+#
+# <image, as tux2lab_image in config/machines.yaml>  <distro>  <version>
+# The distro/version pair must have a golden image on the host
+# (`tux2lab golden-image list`).
+image_1_software_1  almalinux   10
+image_2_software_2  rocky       9
+image_3_software_3  ubuntu-lts  24.04

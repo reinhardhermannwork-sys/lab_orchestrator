@@ -1,0 +1,21 @@
+[0;36m[TASK] Gathering VM information...[0m
+[0;32mlab-m01-aurora-7k4m2.hermann.internal[0m
+├── [0;36mOS:[0m AlmaLinux 10.0 (Purple Lion)
+├── [0;36mBirthdate:[0m 2026-10-01 22:51:22
+├── [0;36mUptime:[0m up 1 minute  │  [0;36mLoad:[0m 0.12, 0.05, 0.01
+├── [0;36mResources[0m
+│   ├── CPU: 2 cores
+│   ├── Memory: 2048 MB allocated  │  412 MB used / 1734 MB total
+│   └── Root FS: 30G total  │  2.1G used (8%)  │  28G available
+├── [0;36mNetwork[0m
+│   ├── NICs
+│   │   └── eth0 - 52:54:00:3a:1c:7e
+│   ├── IPv4
+│   │   ├── 10.28.28.42/22
+│   │   └── Gateway: 10.28.28.1
+│   └── IPv6
+│       ├── fd28:2808:2020:3000::64/64
+│       └── Gateway: fe80::1
+└── [0;36mStorage[0m
+    └── /dev/vda  30G
+

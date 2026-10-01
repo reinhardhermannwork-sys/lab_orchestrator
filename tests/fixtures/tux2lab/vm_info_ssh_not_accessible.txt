@@ -1,0 +1,4 @@
+[0;36m[TASK] Gathering VM information...[0m
+[0;33mlab-m02-forge-q3x9d.hermann.internal[0m
+└── [0;33mState:[0m running (SSH not accessible)
+

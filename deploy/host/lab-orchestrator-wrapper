@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# SSH forced command for the host account `lab-orchestrator` (architecture
+# doc §11, implementation plan M10). sshd runs this instead of whatever the
+# orchestrator asked for and puts the request in SSH_ORIGINAL_COMMAND.
+#
+# Allowed, and nothing else:
+#   tux2lab vm list
+#   tux2lab vm info    -H <hostname>
+#   tux2lab vm start   -H <hostname>
+#   tux2lab vm remove  -H <hostname>              → runs with -f added
+#   tux2lab vm install -H <hostname> -i <image>   → -i mapped to -d/-v
+#
+# <hostname> and <image> must match the orchestrator adapter's own patterns
+# (_HOSTNAME_RE, _IMAGE_NAME_RE in adapters/tux2lab_client.py). The real CLI
+# runs as the tux2lab user through one sudoers rule, with stdin from
+# /dev/null so an interactive prompt can't wait for input. Its stdout,
+# stderr and exit code pass through unchanged: tux2lab prints errors to
+# stdout, and the orchestrator reads them there (decided, §11).
+#
+# Configuration: /etc/lab-orchestrator/wrapper.conf (shell variables)
+#   TUX2LAB_USER   account that runs tux2lab (the lab user)       required
+#   TUX2LAB_BIN    path of the tux2lab CLI                        default /usr/local/bin/tux2lab
+#   IMAGES_CONF    image map, "<image> <distro> <version>" lines  default /etc/lab-orchestrator/images.conf
+set -uo pipefail
+
+CONF="${LAB_ORCHESTRATOR_WRAPPER_CONF:-/etc/lab-orchestrator/wrapper.conf}"
+TUX2LAB_USER=""
+TUX2LAB_BIN="/usr/local/bin/tux2lab"
+IMAGES_CONF="/etc/lab-orchestrator/images.conf"
+# shellcheck source=/dev/null
+[[ -r "$CONF" ]] && source "$CONF"
+
+HOSTNAME_RE='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+IMAGE_RE='^[A-Za-z0-9_.-]{1,128}$'
+TAG="lab-orchestrator-wrapper"
+
+log() { logger -t "$TAG" -- "$*" 2>/dev/null || true; }
+
+refuse() {
+    log "REFUSED: ${1} (request: ${request@Q})"
+    echo "lab-orchestrator-wrapper: refused: ${1}" >&2
+    exit 126
+}
+
+request="${SSH_ORIGINAL_COMMAND:-}"
+
+# Only plain words separated by single spaces. This rules out quoting,
+# globbing, variables, redirection and command separators before any
+# splitting happens.
+[[ "$request" =~ ^[A-Za-z0-9_.\ -]+$ ]] || refuse "unexpected characters"
+read -r -a words <<< "$request"
+[[ "${words[*]}" == "$request" ]] || refuse "unexpected spacing"
+
+[[ -n "$TUX2LAB_USER" ]] || refuse "TUX2LAB_USER not set in $CONF"
+
+check_host() { [[ "$1" =~ $HOSTNAME_RE ]] || refuse "invalid hostname"; }
+
+# Map an image name to "-d <distro> -v <version>" (interim, §3/§14.8).
+map_image() {
+    local image="$1" name distro version
+    [[ "$image" =~ $IMAGE_RE ]] || refuse "invalid image name"
+    [[ -r "$IMAGES_CONF" ]] || refuse "image map $IMAGES_CONF not readable"
+    while read -r name distro version _; do
+        [[ -z "$name" || "$name" == \#* ]] && continue
+        if [[ "$name" == "$image" ]]; then
+            [[ "$distro" =~ ^[a-z0-9-]+$ && "$version" =~ ^[0-9.]+$ ]] \
+                || refuse "bad image map entry for $image"
+            mapped=(-d "$distro" -v "$version")
+            return
+        fi
+    done < "$IMAGES_CONF"
+    refuse "image not in map: $image"
+}
+
+declare -a cli
+n=${#words[@]}
+if [[ $n -ge 3 && "${words[0]}" == "tux2lab" && "${words[1]}" == "vm" ]]; then
+    case "${words[2]}" in
+        list)
+            [[ $n -eq 3 ]] || refuse "vm list takes no arguments"
+            cli=(vm list)
+            ;;
+        info|start)
+            [[ $n -eq 5 && "${words[3]}" == "-H" ]] || refuse "expected: vm ${words[2]} -H <hostname>"
+            check_host "${words[4]}"
+            cli=(vm "${words[2]}" -H "${words[4]}")
+            ;;
+        remove)
+            [[ $n -eq 5 && "${words[3]}" == "-H" ]] || refuse "expected: vm remove -H <hostname>"
+            check_host "${words[4]}"
+            cli=(vm remove -H "${words[4]}" -f)
+            ;;
+        install)
+            [[ $n -eq 7 && "${words[3]}" == "-H" && "${words[5]}" == "-i" ]] \
+                || refuse "expected: vm install -H <hostname> -i <image>"
+            check_host "${words[4]}"
+            declare -a mapped
+            map_image "${words[6]}"
+            cli=(vm install -H "${words[4]}" "${mapped[@]}")
+            ;;
+        *)
+            refuse "command not allowed: vm ${words[2]}"
+            ;;
+    esac
+else
+    refuse "command not allowed"
+fi
+
+log "RUN: tux2lab ${cli[*]}"
+sudo -n -H -u "$TUX2LAB_USER" -- "$TUX2LAB_BIN" "${cli[@]}" </dev/null
+status=$?
+log "EXIT $status: tux2lab ${cli[*]}"
+exit "$status"

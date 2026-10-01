@@ -1,0 +1,5 @@
+VM-Name                               VM-State OS-State      OS-Distro                   
+-----------------------------------------------------------------------------------------
+[0;32mlab-m01-aurora-7k4m2.hermann.internal running  healthy       AlmaLinux 10.0 (Purple Lion)[0m
+[0;33mlab-m02-forge-q3x9d.hermann.internal  running  SSH-Not-Ready [ N/A ]                     [0m
+[0;31mgolden-ref-alma10.hermann.internal    shut     [ N/A ]       [ N/A ]                     [0m

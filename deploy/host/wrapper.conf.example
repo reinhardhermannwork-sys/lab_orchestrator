@@ -1,0 +1,11 @@
+# /etc/lab-orchestrator/wrapper.conf — read by the wrapper (shell syntax).
+
+# The lab user that runs tux2lab (the account tux2lab was set up with; it
+# must not be root).
+TUX2LAB_USER=hermann
+
+# Path of the tux2lab CLI (`command -v tux2lab` as that user).
+TUX2LAB_BIN=/usr/local/bin/tux2lab
+
+# Image map, see images.conf.example.
+IMAGES_CONF=/etc/lab-orchestrator/images.conf
