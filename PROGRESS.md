@@ -1,7 +1,7 @@
 # Lab Orchestrator — Progress Log
 
 **Status as of this writing:** M0–M8 complete (of M0–M12; M8 verified on
-the test VM); M9 built, its traefik/authentik done-when still open. 140 tests passing, `ruff` clean. Next:
+the test VM); M9 built and tried in a real browser on the test VM; its traefik/authentik done-when still open. 140 tests passing, `ruff` clean. Next:
 M9, the web frontend (React + Tailwind via Vite, thin TypeScript Node
 server). Current order: M8
 container, M9 web frontend, M10 host wrapper + real tux2lab, M11/M12
@@ -631,7 +631,30 @@ committed tree:
 
 **Still open:** the M9 done-when behind traefik + authentik (needs the
 VPS's instances: routing file or labels, an authentik application for the
-test hostname, DNS), and the UI in a real browser.
+test hostname, DNS).
+
+## M9 UI in a real browser (test VM)
+
+The human opened the frontend in their own browser through a two-hop SSH
+tunnel (their machine → VPS → test VM's `127.0.0.1:3000`), running as
+`LAB_FRONTEND_DEV_USER=hermann`. The tunnel uses a dedicated `tunnel`
+account on the test VM that accepts only their personal key with
+`restrict,port-forwarding,permitopen="127.0.0.1:3000"` — no shell, no
+other destinations — so neither Claude's sudo-capable account nor
+tux2lab's lab-wide key was involved.
+
+**Verified** (browser + frontend logs): page and assets load, machine list,
+request → `202` → status polling every 2 s → "I'm done" → `202` → "Ended"
+screen, after which polling stops. The human judged the UI fine for now;
+a design pass is planned later, by them. **Not exercised in the browser:**
+reload-finds-lease and the second-request quota message (both covered by
+the curl checks above and by tests).
+
+**Worth knowing:** containers stopped with `compose stop` before a VM
+shutdown don't come back on boot — `restart: unless-stopped` honours the
+manual stop; run `compose up -d` after starting the VM. Minor: the
+frontend logs every 30 s health check at INFO, which buries real requests
+in `docker logs`.
 
 ---
 
