@@ -309,14 +309,15 @@ scope and which milestone fills it in.
       interrupted install can be matched to its lease. Verified by
       `kill -9` of a real `uvicorn` mid-provisioning, then restart (see
       `tests/test_reconcile.py` and `PROGRESS.md`, M7).
-- [ ] **M8 — Container packaging & stage-1 test deploy (fake tux2lab).**
-      *Implemented, not yet verified on the VPS.* `Dockerfile`,
-      `compose.yaml`, `deploy/.env.example`; logging to stdout
-      (`LAB_ORCH_LOG_LEVEL`); explicit `LAB_ORCH_TUX2LAB_BACKEND`. Checked
-      locally by installing the package non-editably and booting it the
-      way the image does (Docker isn't available on the dev VM). The
-      done-when checklist in `IMPLEMENTATION_PLAN.md` M8 still has to run
-      on the VPS.
+- [x] **M8 — Container packaging & stage-1 test deploy (fake tux2lab).**
+      `Dockerfile`, `compose.yaml` + overrides, `deploy/.env.example`;
+      logging to stdout (`LAB_ORCH_LOG_LEVEL`); explicit
+      `LAB_ORCH_TUX2LAB_BACKEND`. Done-when checked on the test VM
+      `claude.hermann.internal` (Docker 29, `deploy/compose.test.yaml`):
+      images build, containers healthy, API not reachable from the lab
+      network, DB survives `down`/`up`, `docker kill` mid-provisioning →
+      reconciliation WARNING in `docker logs`. Not on the VPS host itself
+      (see `PROGRESS.md`, M8 verification).
 - [ ] **M9 — Web frontend** *(own container; against the fake backend)*.
       *Orchestrator side done:* `GET /v1/machines`,
       `GET /v1/instances?user=`, `DELETE /v1/instances/{id}?user=` (early
@@ -327,8 +328,9 @@ scope and which milestone fills it in.
       Tailwind (Vite) with a thin Fastify server that alone talks to the
       orchestrator and takes `user` from `X-authentik-username`; its own
       Dockerfile and a `lab-frontend` compose service with traefik labels.
-      Checked locally end-to-end; the done-when (traefik/authentik on the
-      VPS) is still open. See `frontend/README.md`.
+      Runs as a container on the test VM (full flow through the frontend
+      container verified); the done-when behind traefik/authentik on the
+      VPS is still open. See `frontend/README.md`.
 - [ ] M10 — Host wrapper & real tux2lab integration
 - [ ] M11 — Guacamole JSON-auth adapter
 - [ ] M12 — Guacamole tunnel-close listener *(separate Java project)*

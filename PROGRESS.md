@@ -1,7 +1,7 @@
 # Lab Orchestrator — Progress Log
 
-**Status as of this writing:** M0–M7 complete (of M0–M12); M8 implemented,
-awaiting verification on the VPS. 140 tests passing, `ruff` clean. Next:
+**Status as of this writing:** M0–M8 complete (of M0–M12; M8 verified on
+the test VM); M9 built, its traefik/authentik done-when still open. 140 tests passing, `ruff` clean. Next:
 M9, the web frontend (React + Tailwind via Vite, thin TypeScript Node
 server). Current order: M8
 container, M9 web frontend, M10 host wrapper + real tux2lab, M11/M12
@@ -588,6 +588,50 @@ the DB); mallory gets 404 on it; release → `DESTROYING` → `DESTROYED`;
 orchestrator down → 502. **Not verified:** the UI in a real browser (only
 jsdom), the Docker images, and the M9 done-when behind traefik/authentik
 on the VPS.
+
+## M8 verification on a test VM (and M9 in containers)
+
+A disposable test VM, `claude.hermann.internal` (Ubuntu 26.04, 2 vCPU,
+1.9 GiB RAM, on the VPS's tux2lab lab), with its own `claude` account and
+key (`~/.ssh/claude-testvm/` on the dev VM). Docker Engine 29.8.2 + Compose
+v5.5.1 from Docker's apt repository. The human chose not to use the VPS's
+traefik/authentik for this round, so the stack ran with
+`deploy/compose.test.yaml`.
+
+**Compose split (new):** `compose.yaml` is now a base without traefik labels
+or published ports, plus exactly one override: `deploy/compose.traefik.yaml`
+(labels, for the VPS) or `deploy/compose.test.yaml` (frontend on the
+machine's `127.0.0.1:3000` only — nothing else on the network can reach it
+to forge the identity header).
+
+**Worth knowing:** tux2lab installs `/etc/ssh/ssh_config.d/999-tux2lab.conf`
+on lab VMs, which silently adds the lab-wide key to every SSH connection to
+a lab host. The first login to the test VM used that key without it being
+asked for; the dedicated access now uses `ssh -F` with its own config so the
+lab key is never offered.
+
+**Verified on the test VM**, code shipped with `git archive` of the
+committed tree:
+- both images build (first real `docker build`); both containers healthy;
+  together ~95 MB RAM
+- only `127.0.0.1:3000` listens; ports 3000 and 8000 refuse connections
+  from the lab network
+- through the frontend container: page served; 401 without the header;
+  machine list; request with a forged `"user":"mallory"` in the body → the
+  lease belongs to `hermann` in the container's DB; mallory gets 404 on it;
+  a second request → 409 with the quota message; release → `DESTROYING` →
+  `DESTROYED`
+- `docker compose down` + `up` keeps the DB
+- `docker kill` while a lease was `WAITING_READY`, then `up`: `docker logs`
+  shows `reconcile: instance … (user hermann, VM lab-m03-atlas-…) was
+  WAITING_READY when the orchestrator stopped; moved to CLEANUP…`, and the
+  janitor finished it within the same second (`failure_reason`: "orchestrator
+  restarted while instance was WAITING_READY")
+- janitor/reconcile INFO lines appear in `docker logs` (the M8 logging fix)
+
+**Still open:** the M9 done-when behind traefik + authentik (needs the
+VPS's instances: routing file or labels, an authentik application for the
+test hostname, DNS), and the UI in a real browser.
 
 ---
 
