@@ -329,7 +329,7 @@ scope and which milestone fills it in.
       network, DB survives `down`/`up`, `docker kill` mid-provisioning →
       reconciliation WARNING in `docker logs`. Not on the VPS host itself
       (see `PROGRESS.md`, M8 verification).
-- [ ] **M9 — Web frontend** *(own container; against the fake backend)*.
+- [x] **M9 — Web frontend** *(own container; against the fake backend)*.
       *Orchestrator side done:* `GET /v1/machines`,
       `GET /v1/instances?user=`, `DELETE /v1/instances/{id}?user=` (early
       release via the new `USER_RELEASED` event, owner-checked, the janitor
@@ -339,9 +339,12 @@ scope and which milestone fills it in.
       Tailwind (Vite) with a thin Fastify server that alone talks to the
       orchestrator and takes `user` from `X-authentik-username`; its own
       Dockerfile and a `lab-frontend` compose service with traefik labels.
-      Runs as a container on the test VM (full flow through the frontend
-      container verified); the done-when behind traefik/authentik on the
-      VPS is still open. See `frontend/README.md`.
+      Done-when checked on the VPS at `lab.planetsexpress.dedyn.io`
+      behind traefik + authentik (2026-10-01): login, machine list,
+      request → `READY`, lease found again after reload, a second user
+      neither sees nor can read/end it (404), no login → redirect to
+      authentik, a forged `X-authentik-username` is overwritten by
+      traefik. See `frontend/README.md` and `PROGRESS.md`.
 - [ ] M10 — Host wrapper & real tux2lab integration
 - [ ] M11 — Guacamole JSON-auth adapter
 - [ ] M12 — Guacamole tunnel-close listener *(separate Java project)*

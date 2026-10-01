@@ -1,9 +1,9 @@
 # Lab Orchestrator — Progress Log
 
-**Status as of this writing:** M0–M8 complete (of M0–M12; M8 verified on
-the test VM); M9 built and tried in a real browser on the test VM; its traefik/authentik done-when still open. 140 tests passing, `ruff` clean. Next:
-M9, the web frontend (React + Tailwind via Vite, thin TypeScript Node
-server). Current order: M8
+**Status as of this writing:** M0–M9 complete (of M0–M12; M8 verified on
+the test VM, M9 on the VPS behind traefik + authentik). 159 tests passing,
+`ruff` clean. Next: M10, the host wrapper and the real tux2lab host.
+Current order: M8
 container, M9 web frontend, M10 host wrapper + real tux2lab, M11/M12
 Guacamole — see "Milestone reorder" below; older sections keep the numbers
 they had when written.
@@ -702,7 +702,24 @@ unreachable fake IP keep the default. New tests for both sides; 159 pass.
 Seen meanwhile: `test_hostnames_do_not_collide_in_practice` is flaky by
 design (2000 draws from 32^5 names collide ~6% of the time), not changed.
 
-**Not yet done:** the M9 done-when checks.
+**M9 done-when, checked on the VPS (2026-10-01)** with the user in their
+browser, `hermann` and the second authentik user `labtest2`:
+- logged in through traefik/authentik; the page shows the authentik
+  username and the three machine types
+- request → `READY` (instantly with the fake backend); the lease is found
+  again after a reload
+- `labtest2` sees only the machine list, not hermann's lease; from
+  labtest2's browser console, `GET` and `DELETE /api/instances/<hermann's id>`
+  both return 404 (the lease stayed `READY`)
+- no login: `curl https://lab.planetsexpress.dedyn.io/api/me` → 302 to
+  authentik's authorize endpoint; the frontend is never reached
+- forged header from labtest2's console
+  (`X-authentik-username: hermann` on `/api/me` and `/api/instance`) →
+  `user: "labtest2"` and `instance: null`: traefik overwrites it from
+  authentik's response
+Caveat (architecture doc §17): on the shared `web` network, other
+containers can still reach the frontend directly and forge the header;
+accepted while on the fake backend.
 
 ## Open questions still outstanding
 
