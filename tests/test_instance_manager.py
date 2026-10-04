@@ -18,7 +18,11 @@ import pytest
 import sqlalchemy as sa
 
 from lab_orchestrator import naming
-from lab_orchestrator.adapters.tux2lab_client import FakeTux2LabClient, Tux2LabCommandError
+from lab_orchestrator.adapters.tux2lab_client import (
+    FakeTux2LabClient,
+    HostCapacityError,
+    Tux2LabCommandError,
+)
 from lab_orchestrator.core import instance_manager, janitor
 from lab_orchestrator.core.config import Settings, load_machine_definitions
 from lab_orchestrator.core.state_machine import IllegalTransition, InstanceState
@@ -225,6 +229,21 @@ async def test_provision_instance_install_failure_fails_cleanly(
     row = row_of(engine, created["id"])
     assert row["state"] == InstanceState.DESTROYED.value
     assert "simulated install failure" in row["failure_reason"]
+
+
+async def test_provision_instance_host_out_of_memory_says_the_lab_is_full(
+    engine, machines, tux2lab, settings, working_naming
+):
+    tux2lab.raise_once = HostCapacityError("[ERROR] lab host is out of memory", exit_status=75)
+    created = await instance_manager.create_instance(
+        engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
+    )
+    await instance_manager.provision_instance(
+        engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+    )
+    row = row_of(engine, created["id"])
+    assert row["state"] == InstanceState.DESTROYED.value
+    assert row["failure_reason"].startswith("The lab is full right now, please try again later.")
 
 
 async def test_provision_instance_readiness_timeout_fails_cleanly(

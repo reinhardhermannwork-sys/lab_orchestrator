@@ -161,6 +161,26 @@ def test_fourth_active_instance_globally_rejected(engine):
         insert(engine, id="u4", user_id="u4")
 
 
+def test_global_limit_follows_the_setting_after_a_restart(engine):
+    # Boot with a limit of 1: a second active instance is refused.
+    init_db(engine, max_active_instances=1)
+    insert(engine, id="u1", user_id="u1")
+    with pytest.raises(IntegrityError, match=r"global active-instance quota \(1\)"):
+        insert(engine, id="u2", user_id="u2")
+    # "Restart" with a limit of 5 on the same DB: the trigger is replaced.
+    init_db(engine, max_active_instances=5)
+    for n in range(2, 6):
+        insert(engine, id=f"u{n}", user_id=f"u{n}")
+    with pytest.raises(IntegrityError, match=r"global active-instance quota \(5\)"):
+        insert(engine, id="u6", user_id="u6")
+
+
+@pytest.mark.parametrize("bad_limit", [0, -1, True, "3"])
+def test_global_limit_must_be_a_positive_integer(engine, bad_limit):
+    with pytest.raises(ValueError):
+        init_db(engine, max_active_instances=bad_limit)
+
+
 def test_global_slot_frees_up_after_destroy(engine):
     insert(engine, id="u1", user_id="u1")
     insert(engine, id="u2", user_id="u2")

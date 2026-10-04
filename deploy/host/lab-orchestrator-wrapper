@@ -8,7 +8,8 @@
 #   tux2lab vm info    -H <hostname>
 #   tux2lab vm start   -H <hostname>
 #   tux2lab vm remove  -H <hostname>              → runs with -f added
-#   tux2lab vm install -H <hostname> -i <image>   → -i mapped to -d/-v
+#   tux2lab vm install -H <hostname> -i <image>   → -i mapped to -d/-v and
+#                                                   the image's --cpu/--memory
 #
 # <hostname> and <image> must match the orchestrator adapter's own patterns
 # (_HOSTNAME_RE, _IMAGE_NAME_RE in adapters/tux2lab_client.py). The real CLI
@@ -17,16 +18,26 @@
 # stderr and exit code pass through unchanged: tux2lab prints errors to
 # stdout, and the orchestrator reads them there (decided, §11).
 #
+# Before an install, the wrapper checks that the host has the VM's memory
+# plus RESERVE_MIB available (MemAvailable). If not, it prints an [ERROR]
+# line on stdout and exits 75 (EX_TEMPFAIL) without calling tux2lab, so a
+# full host refuses new VMs instead of running out of RAM.
+#
 # Configuration: /etc/lab-orchestrator/wrapper.conf (shell variables)
 #   TUX2LAB_USER   account that runs tux2lab (the lab user)       required
 #   TUX2LAB_BIN    path of the tux2lab CLI                        default /usr/local/bin/tux2lab
-#   IMAGES_CONF    image map, "<image> <distro> <version>" lines  default /etc/lab-orchestrator/images.conf
+#   IMAGES_CONF    image map, "<image> <distro> <version> [<cpu> <memory_gib>]" lines
+#                                                                 default /etc/lab-orchestrator/images.conf
+#   RESERVE_MIB    RAM kept free for the host, on top of the VM   default 1024
+#   MEMINFO        where MemAvailable is read (tests)             default /proc/meminfo
 set -uo pipefail
 
 CONF="${LAB_ORCHESTRATOR_WRAPPER_CONF:-/etc/lab-orchestrator/wrapper.conf}"
 TUX2LAB_USER=""
 TUX2LAB_BIN="/usr/local/bin/tux2lab"
 IMAGES_CONF="/etc/lab-orchestrator/images.conf"
+RESERVE_MIB=1024
+MEMINFO="/proc/meminfo"
 # shellcheck source=/dev/null
 [[ -r "$CONF" ]] && source "$CONF"
 
@@ -55,21 +66,45 @@ read -r -a words <<< "$request"
 
 check_host() { [[ "$1" =~ $HOSTNAME_RE ]] || refuse "invalid hostname"; }
 
-# Map an image name to "-d <distro> -v <version>" (interim, §3/§14.8).
+# Map an image name to "-d <distro> -v <version>" (interim, §3/§14.8),
+# plus "--cpu <n> --memory <gib>" when the entry sets a size. The size
+# lives here, on the host, so the orchestrator can't ask for more.
+# Without one, tux2lab's default applies (2 vCPU / 2 GiB).
 map_image() {
-    local image="$1" name distro version
+    local image="$1" name distro version cpu memory extra
     [[ "$image" =~ $IMAGE_RE ]] || refuse "invalid image name"
     [[ -r "$IMAGES_CONF" ]] || refuse "image map $IMAGES_CONF not readable"
-    while read -r name distro version _; do
+    while read -r name distro version cpu memory extra; do
         [[ -z "$name" || "$name" == \#* ]] && continue
         if [[ "$name" == "$image" ]]; then
-            [[ "$distro" =~ ^[a-z0-9-]+$ && "$version" =~ ^[0-9.]+$ ]] \
+            [[ "$distro" =~ ^[a-z0-9-]+$ && "$version" =~ ^[0-9.]+$ && -z "$extra" ]] \
                 || refuse "bad image map entry for $image"
             mapped=(-d "$distro" -v "$version")
+            vm_memory_gib=2
+            if [[ -n "$cpu" || -n "$memory" ]]; then
+                [[ "$cpu" =~ ^(1|2|4|8)$ && "$memory" =~ ^(1|2|4|8|16)$ ]] \
+                    || refuse "bad image map entry for $image"
+                mapped+=(--cpu "$cpu" --memory "$memory")
+                vm_memory_gib=$memory
+            fi
             return
         fi
     done < "$IMAGES_CONF"
     refuse "image not in map: $image"
+}
+
+# Exit 75 unless the host has the VM's memory plus RESERVE_MIB available.
+check_memory() {
+    local avail_kib need_mib
+    [[ "$RESERVE_MIB" =~ ^[0-9]+$ ]] || refuse "RESERVE_MIB must be a number"
+    avail_kib=$(awk '/^MemAvailable:/ {print $2; exit}' "$MEMINFO" 2>/dev/null)
+    [[ "$avail_kib" =~ ^[0-9]+$ ]] || refuse "cannot read MemAvailable from $MEMINFO"
+    need_mib=$(( vm_memory_gib * 1024 + RESERVE_MIB ))
+    if (( avail_kib / 1024 < need_mib )); then
+        log "OUT OF MEMORY: ${avail_kib}KiB available, ${need_mib}MiB needed (request: ${request@Q})"
+        echo "[ERROR] lab host is out of memory: $(( avail_kib / 1024 )) MiB available, ${need_mib} MiB needed."
+        exit 75
+    fi
 }
 
 declare -a cli
@@ -95,7 +130,9 @@ if [[ $n -ge 3 && "${words[0]}" == "tux2lab" && "${words[1]}" == "vm" ]]; then
                 || refuse "expected: vm install -H <hostname> -i <image>"
             check_host "${words[4]}"
             declare -a mapped
+            vm_memory_gib=2
             map_image "${words[6]}"
+            check_memory
             cli=(vm install -H "${words[4]}" "${mapped[@]}")
             ;;
         *)

@@ -2,9 +2,15 @@
 # §11). tux2lab can't install a named golden image yet; the wrapper turns
 # `-i <image>` into `-d <distro> -v <version>` with this table.
 #
-# <image, as tux2lab_image in config/machines.yaml>  <distro>  <version>
+# <image, as tux2lab_image in config/machines.yaml>  <distro>  <version>  [<cpu>  <memory_gib>]
 # The distro/version pair must have a golden image on the host
 # (`tux2lab golden-image list`).
-image_1_software_1  almalinux   10
-image_2_software_2  rocky       9
-image_3_software_3  ubuntu-lts  24.04
+#
+# <cpu> and <memory_gib> set the VM size (each 1, 2, 4 or 8; memory also
+# 16). The wrapper passes them as --cpu/--memory. Leave both out for
+# tux2lab's default, 2 vCPU / 2 GiB. The size is set here, on the host,
+# so the orchestrator can't ask for a bigger VM. 1/1 is enough for VMs
+# used over SSH only (architecture doc §17, "Capacity").
+image_1_software_1  almalinux   10     1  1
+image_2_software_2  rocky       9      1  1
+image_3_software_3  ubuntu-lts  24.04  1  1

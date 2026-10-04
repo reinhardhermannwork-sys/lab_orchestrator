@@ -46,7 +46,7 @@ LabInstance
 
 Rules:
 - **1 user → max 1 active `LabInstance`**, regardless of machine type. A second `POST` while one is active is rejected with `409` (decided in M5, see §14.6).
-- **Host → max 3 active `LabInstance`s globally.**
+- **Host → max N active `LabInstance`s globally**, N = `LAB_ORCH_MAX_ACTIVE_INSTANCES` (default 3), sized to the host's free RAM (§17, "Capacity").
 - `tux2lab` remains the sole authority over the actual VM; the orchestrator never manages VMs directly.
 
 ## 3. Machine definitions
@@ -83,6 +83,8 @@ machines:
 `code` and `codename` exist purely to build human-readable, "fancy" hostnames without leaking the username into VM identity.
 
 **One golden image per machine type.** `tux2lab_image` names a prefabricated golden image that already contains that machine's tool-controller software — selecting machine A installs image A. Today's `tux2lab` can only install golden images selected by distro + version (`vm install -d <distro> -v <version>`); installing from a *named* per-machine image is a planned `tux2lab` enhancement, developed separately. Until it exists, the host wrapper translates the image name into `-d/-v` (§11, §14.8). The orchestrator's config and code do not change when that enhancement lands.
+
+**VM size lives on the host, not here.** The host's image map gives each image its vCPUs and RAM, and the wrapper passes them to `tux2lab vm install` as `--cpu/--memory` (§11). The orchestrator's key can't ask for a bigger VM than the host allows, and the orchestrator's interface (`install -H <host> -i <image>`) stays the same. Decided 2026-10-04.
 
 ## 4. Identity (prototype vs. final)
 
@@ -396,7 +398,8 @@ KVM HOST
 
 - A dedicated host account `lab-orchestrator`. Its `authorized_keys` entry carries `restrict,command="<wrapper>"`, so the key can do nothing but run the wrapper — no shell, pty, or forwarding.
 - The wrapper parses `SSH_ORIGINAL_COMMAND` and accepts only the five commands above, with arguments checked against the same strict hostname/image patterns the adapter enforces (§14.3). Anything else is rejected and logged.
-- It adds `-f` to `remove`, applies the interim image mapping to `install`, and runs the real CLI as the tux2lab user through a sudoers rule that permits exactly that one step.
+- It adds `-f` to `remove`, applies the interim image mapping to `install` (distro/version plus the image's `--cpu/--memory`, §3), and runs the real CLI as the tux2lab user through a sudoers rule that permits exactly that one step.
+- Before an install it checks the host's free RAM: if `MemAvailable` is below the VM's memory plus `RESERVE_MIB`, it prints `[ERROR] lab host is out of memory` and exits **75** without calling tux2lab (tux2lab itself only checks against *total* RAM). The adapter raises `HostCapacityError` for exit 75. It is never retried, and the lease ends `FAILED` with "The lab is full right now, please try again later."
 - Every call is logged to the host's syslog.
 
 ## 12. SSH key handling
@@ -472,7 +475,7 @@ These should be explicit decisions before/while implementing, not discovered mid
 
 ## 15. Settled decisions (checklist)
 
-- [x] One active VM per user; at most 3 active VMs globally
+- [x] One active VM per user; at most N active VMs globally (`LAB_ORCH_MAX_ACTIVE_INSTANCES`, default 3; was a fixed 3 until 2026-10-04)
 - [x] Machine definitions live in orchestrator config, not tux2lab
 - [x] tux2lab remains untouched; accessed only through its CLI
 - [x] Orchestrator runs in its own container on the KVM host (details: §17)
@@ -494,7 +497,7 @@ These should be explicit decisions before/while implementing, not discovered mid
 - [x] Orchestrator container on a Docker bridge network shared with the frontend and Guacamole; API never exposed outside it (§17)
 - [x] Web frontend is part of this project, its own container (M9); users reach VMs through Guacamole (§1, §13)
 - [x] Web frontend stack: React + Tailwind (Vite) served by a thin TypeScript Node.js server (Fastify) that alone talks to the orchestrator and sets `user` from the authentik header `X-authentik-username` (§4)
-- [x] Users can release their VM early (`DELETE`, new `USER_RELEASED` event) so finished sessions free one of the 3 global slots (§8)
+- [x] Users can release their VM early (`DELETE`, new `USER_RELEASED` event) so finished sessions free one of the global slots (§8)
 
 ## 16. Final architecture diagram
 
@@ -557,12 +560,18 @@ VPS (host)
 ```
 
 - **Network.** The orchestrator joins the shared bridge network. Its API has no published port and no traefik route: only containers on that network (the frontend) can reach it. The orchestrator never talks to `tux2lab-engine` directly — only to the `tux2lab` CLI through the wrapper.
-  - **Current VPS test setup (decided, temporary):** the "lab network" is traefik's existing `web` network, which the VPS's other apps (Seafile, Zammad, authentik, Guacamole, …) also join. Those containers can therefore reach the orchestrator API and the frontend directly, bypassing authentik and forging the identity header. Accepted while experimenting with the fake backend; before real VMs (M10) move the lab to its own network that only traefik, the frontend, the orchestrator and Guacamole join.
+  - **Current VPS test setup (decided, temporary):** the "lab network" is traefik's existing `web` network, which the VPS's other apps (Seafile, Zammad, authentik, Guacamole, …) also join. Those containers can therefore reach the orchestrator API and the frontend directly, bypassing authentik and forging the identity header. Accepted while experimenting with the fake backend. The plan was to move the lab to its own network (only traefik, the frontend, the orchestrator and Guacamole) before real VMs; on 2026-10-04 the user deferred that, so M10 step B starts on `web` too. Still to do before the lab is used by anyone beyond testers.
 - **Public route.** The frontend is served at `lab.planetsexpress.dedyn.io` (deSEC A record → the VPS) behind authentik forward auth (`authentik@file`, a Proxy provider in "Forward auth (single application)" mode). The hostname's `/outpost.goauthentik.io/` paths go to authentik's outpost through a second router with an explicit higher priority (README, "Deployment").
 - **Host SSH.** The container reaches the host's sshd via `extra_hosts: host.docker.internal:host-gateway`. The host's sshd and the VPS firewall must accept connections from the Docker network's subnet. Host key checking stays on: a `known_hosts` file is mounted into the container (§11, `LAB_ORCH_TUX2LAB_SSH_KNOWN_HOSTS_PATH`).
 - **VM reachability.** The readiness check (TCP/22) and `guacd` open *new* connections from the Docker network into `labbr0`. libvirt's NAT rules reject forwarded new connections into its network, so the host needs an explicit rule (e.g. in the `DOCKER-USER` chain) allowing the Docker network's subnet → `10.28.28.0/22`. Containers connect to VMs **by IP** — they don't use the lab DNS (10.28.28.1).
 - **Persistence.** SQLite lives in a volume mounted at `/data` — the whole directory, since WAL mode keeps side files next to the DB. `machines.yaml` is mounted read-only. Secrets (the wrapper SSH key, `known_hosts`, later the lab VM key for Guacamole) are mounted read-only and never baked into the image (§12).
 - **Process model.** Exactly **one** uvicorn worker. The janitor, the in-process provisioning tasks, and the SQLite locking model all assume a single process (§10). `docker stop` cancels in-flight provisioning; startup reconciliation cleans that up on the next start (§14.2).
 - **Logs** go to stdout/stderr, for `docker logs`.
+- **Capacity (decided 2026-10-04).** The lab VMs share the VPS with every other service, and RAM is the limit:
+  - **CPU is shared freely.** A vCPU is an ordinary host thread; mostly-idle SSH VMs can have more vCPUs in total than the host has cores. Busy VMs only get slower.
+  - **RAM is not overcommitted.** Count each VM at its full size plus ~150 MiB QEMU overhead; Linux guests fill free memory with cache over time. Running out lets the OOM killer pick a VM or a VPS service. KSM (merging identical pages) is an optional host setting (`deploy/host/README.md`).
+  - **Disk.** An install copies the golden image (`qemu-img convert`), so a VM starts at the image's real size and grows up to 30 GiB (tux2lab's minimum). Leases last hours, so free space is watched, not budgeted.
+  - **VM size:** 1 vCPU / 1 GiB (the minimum tux2lab allows for golden-image installs), set per image in the host's `images.conf`. Enough because the VMs are used over SSH only.
+  - **Limit:** `LAB_ORCH_MAX_ACTIVE_INSTANCES` = floor((MemTotal − RAM used by everything else − 1 GiB reserve) / 1.15 GiB), from numbers measured on the VPS. The wrapper's RAM check (§11) is the safety net when something else takes RAM. *Measured numbers and chosen value: pending (M10 step B).*
 
 See `IMPLEMENTATION_PLAN.md` M8 (container packaging) and M10 (host wrapper + real `tux2lab`).

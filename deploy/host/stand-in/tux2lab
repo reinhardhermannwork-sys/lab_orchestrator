@@ -28,6 +28,8 @@
 #   TUX2LAB_STANDIN_BOOT_SECONDS    install → healthy delay (default 20)
 #   TUX2LAB_STANDIN_INSTALL_SECONDS how long install takes (default 3)
 #   TUX2LAB_STANDIN_IMAGES          installable "<distro>:<version>" list
+#   TUX2LAB_STANDIN_HOST_CPUS       host CPU count for the --cpu check (default nproc)
+#   TUX2LAB_STANDIN_HOST_MEM_GIB    host GiB for the --memory check (default MemTotal, rounded down)
 #                                   (default "almalinux:10 rocky:9 ubuntu-lts:24.04")
 set -euo pipefail
 
@@ -317,12 +319,37 @@ cmd_remove() {
 
 # --- vm install, golden image path (kvm-install-golden.sh) ------------------
 cmd_install() {
-    local host="" distro="" version=""
+    local host="" distro="" version="" cpus=2 memory=2 host_cpus host_mem_gib
+    host_cpus="${TUX2LAB_STANDIN_HOST_CPUS:-$(nproc)}"
+    host_mem_gib="${TUX2LAB_STANDIN_HOST_MEM_GIB:-$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 1024 / 1024 ))}"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -H) shift; host="${1:-}"; shift || true ;;
             -d) shift; distro="${1:-}"; shift || true ;;
             -v) shift; version="${1:-}"; shift || true ;;
+            # Same checks and messages as parse-vm-command-args.sh.
+            --cpu)
+                if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
+                    print_error "--cpu requires a number."; exit 1
+                fi
+                if ! [[ "$2" =~ ^[1-9][0-9]*$ ]] || (( ($2 & ($2 - 1)) != 0 )); then
+                    print_error "--cpu must be a power of 2 (1, 2, 4, 8, 16...). Got: '$2'"; exit 1
+                fi
+                if (( $2 > host_cpus )); then
+                    print_error "--cpu cannot exceed host CPU count (${host_cpus}). Got: '$2'"; exit 1
+                fi
+                cpus="$2"; shift 2 ;;
+            --memory)
+                if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
+                    print_error "--memory requires a value in GiB (power of 2)."; exit 1
+                fi
+                if ! [[ "$2" =~ ^[1-9][0-9]*$ ]] || (( ($2 & ($2 - 1)) != 0 )); then
+                    print_error "--memory must be a power of 2 in GiB (1, 2, 4, 8, 16...). Got: '$2'"; exit 1
+                fi
+                if (( $2 >= host_mem_gib )); then
+                    print_error "--memory must be less than host memory (${host_mem_gib} GiB). Got: '$2'"; exit 1
+                fi
+                memory="$2"; shift 2 ;;
             --via-golden) shift ;;
             *) print_error "Unknown option: $1"; exit 1 ;;
         esac
@@ -357,7 +384,7 @@ cmd_install() {
     print_task_done
     # The VM is defined and started at the end of the install.
     echo "$(date +%s) running" > "$(vm_file "$vm")"
-    print_info "VM specs: 2 vCPUs, 2 GiB RAM, 30 GiB disk"
+    print_info "VM specs: ${cpus} vCPUs, ${memory} GiB RAM, 30 GiB disk"
     print_green "Installation of \"${vm}\" initiated successfully."
     print_yellow "    ▸ The VM will be ready in about a minute."
     print_yellow "    ▸ To check VM status:  tux2lab vm list"

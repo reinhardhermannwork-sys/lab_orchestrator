@@ -781,6 +781,69 @@ demos/onboarding without a KVM host and for end-to-end checks before changes
 reach the real host. After M10 on purpose, so the stand-in can be checked
 against output captured on the real host. See the implementation plan.
 
+## M10 — capacity on a small VPS (before step B)
+
+The VPS is short of RAM and CPU, and the lab VMs share it with traefik,
+authentik, Zammad, Seafile and the rest. Before step B: every VM got
+tux2lab's default 2 vCPU / 2 GiB, the global limit was a fixed 3, and
+nothing stopped an install on a full host. tux2lab only checks a size
+against *total* RAM, so an install on a busy host ends with the OOM killer.
+
+From the tux2lab source (@ 0d0c7dc): golden-image installs accept
+`--cpu`/`--memory` down to **1 vCPU / 1 GiB** (powers of 2); the root disk
+is at least 30 GiB, but it's a qcow2 copy of the golden image that grows on
+write. Decided with the user: the VMs are **SSH only** → 1 vCPU / 1 GiB;
+the limit is **"whatever fits"**, a setting worked out from VPS numbers;
+the separate Docker network is **deferred** (architecture §17).
+
+**Judgment calls (recorded in architecture §3/§11/§17):**
+- The size lives in the host's `images.conf` (two new columns), not in
+  `machines.yaml`. The host admin owns the host's RAM, the orchestrator's
+  key can't ask for more, and the wire protocol doesn't change.
+- CPU is shared freely (vCPUs are host threads; idle SSH VMs cost little).
+  RAM is never overcommitted: count each VM at 1 GiB + ~150 MiB overhead.
+  KSM is documented as an optional host setting, not required.
+- The wrapper's free-RAM check (`MemAvailable` ≥ VM memory + `RESERVE_MIB`,
+  default 1024) is the safety net even when something else on the VPS
+  takes RAM. It exits 75 (EX_TEMPFAIL), which the adapter turns into
+  `HostCapacityError`. That error is definitive (no VM was created), so
+  it's never retried, and the lease fails with "The lab is full right now,
+  please try again later." The frontend already shows that reason.
+- `LAB_ORCH_MAX_ACTIVE_INSTANCES` (default 3, ≥ 1) replaces the fixed 3.
+  `init_db` drops and recreates the trigger on every boot, so a new value
+  takes effect on restart; the trigger's message keeps its text.
+
+**Built:** wrapper (`--cpu/--memory` from the map, RAM check, `MEMINFO`
+override for tests), stand-in (`--cpu/--memory` with tux2lab's own checks
+and messages, the size in `VM specs:`), adapter, instance manager, the
+setting, docs, example configs.
+
+**Verified:** 184 tests pass. New ones: the size reaches the CLI (and the
+default stays without one); a bad size entry is refused; the RAM check's
+boundary (2047 vs. 2048 MiB for a 1 GiB VM); exit 75 → `HostCapacityError`
+over SSH with no retry and no VM; the lease ends DESTROYED with the "lab
+is full" reason; the trigger follows limits 1 and 5 on the same DB across
+"restarts"; bad limits are refused. Before the test harness got a fake
+meminfo, the existing lifecycle test failed on the dev machine (492 MiB
+free, 3072 needed), so the check works end to end.
+
+**Rehearsed on the test VM** (real sshd, the orchestrator's key, the
+wrapper and the stand-in, images.conf with `1 1`): with ~1.5 GiB free and
+the default reserve, the install is refused (`[ERROR] lab host is out of
+memory: 1544 MiB available, 2048 MiB needed.`, exit 75, `OUT OF MEMORY` in
+journald); with `RESERVE_MIB=256` the wrapper lets it through and the
+stand-in, like real tux2lab, refuses `--memory 1` on a host with < 2 GiB
+total (tux2lab wants memory < MemTotal in whole GiB, irrelevant on the
+VPS); with the stand-in told the host has 4 GiB, the install runs as
+`-d almalinux -v 10 --cpu 1 --memory 1` and reports `VM specs: 1 vCPUs,
+1 GiB RAM`. The test VM now keeps `RESERVE_MIB=256` and
+`TUX2LAB_STANDIN_HOST_MEM_GIB=4` for later rehearsals (old config in
+`/etc/lab-orchestrator.bak-2026-10-04`).
+
+**Left for step B:** measure the VPS (`nproc`, `free -m`, `df -h`, running
+VMs, container RAM), compute the limit, record it in architecture §17;
+boot a real 1 GiB VM and compare `free -m` before/after.
+
 ## Open questions still outstanding
 
 None blocking M9. Its stack is decided: React + Tailwind (Vite) with a thin

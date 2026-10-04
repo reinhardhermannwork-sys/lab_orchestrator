@@ -99,6 +99,7 @@ uppercased, or a `.env` file in the repo root. Currently defined:
 | `LAB_ORCH_TUX2LAB_SSH_KNOWN_HOSTS_PATH` | *(none — see note below)* | M4/M5 |
 | `LAB_ORCH_TUX2LAB_SSH_COMMAND_TIMEOUT` | `30.0` | M4/M5 |
 | `LAB_ORCH_TUX2LAB_SSH_INSTALL_TIMEOUT` | `600.0` | M10 — `vm install` only (disk clone) |
+| `LAB_ORCH_MAX_ACTIVE_INSTANCES` | `3` | Capacity — active instances across all users; size it to the host's free RAM (architecture doc §17), applied on restart |
 | `LAB_ORCH_LEASE_LIFETIME_HOURS` | `4.0` | M5 — architecture doc §7's own number, not a guess |
 | `LAB_ORCH_PROVISIONING_POLL_INTERVAL_SECONDS` | `2.0` | M5 — this module's own judgment call; not specified in the doc |
 | `LAB_ORCH_PROVISIONING_TIMEOUT_SECONDS` | `300.0` | M5 — same |

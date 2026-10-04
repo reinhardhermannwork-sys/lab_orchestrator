@@ -25,6 +25,7 @@ import pytest
 
 from lab_orchestrator.adapters.tux2lab_client import (
     FakeTux2LabClient,
+    HostCapacityError,
     InvalidIdentifierError,
     SSHTux2LabClient,
     Tux2LabClient,
@@ -54,9 +55,21 @@ class _WrapperHost:
         sudo.write_text('#!/bin/bash\nwhile [[ "$1" != "--" ]]; do shift; done; shift; exec "$@"\n')
         sudo.chmod(0o755)
         images = workdir / "images.conf"
-        images.write_text("# image distro version\nimage-1 almalinux 10\nmy-image rocky 9\n")
+        images.write_text(
+            "# image distro version [cpu memory_gib]\n"
+            "image-1 almalinux 10\n"
+            "my-image rocky 9\n"
+            "small-image almalinux 10 1 1\n"
+            "bad-size-image almalinux 10 3 1\n"
+        )
+        # The wrapper's free-RAM guard reads this instead of /proc/meminfo.
+        self.meminfo = workdir / "meminfo"
+        self.set_mem_available_mib(8192)
         conf = workdir / "wrapper.conf"
-        conf.write_text(f"TUX2LAB_USER=tester\nTUX2LAB_BIN={STAND_IN}\nIMAGES_CONF={images}\n")
+        conf.write_text(
+            f"TUX2LAB_USER=tester\nTUX2LAB_BIN={STAND_IN}\nIMAGES_CONF={images}\n"
+            f"MEMINFO={self.meminfo}\nRESERVE_MIB=1024\n"
+        )
         self.env = {
             **os.environ,
             "PATH": f"{shim_dir}:{os.environ.get('PATH', '')}",
@@ -64,7 +77,27 @@ class _WrapperHost:
             "TUX2LAB_STANDIN_STATE": str(workdir / "state"),
             "TUX2LAB_STANDIN_BOOT_SECONDS": "0",
             "TUX2LAB_STANDIN_INSTALL_SECONDS": "0",
+            # The stand-in checks --cpu/--memory against the host, like tux2lab.
+            "TUX2LAB_STANDIN_HOST_CPUS": "4",
+            "TUX2LAB_STANDIN_HOST_MEM_GIB": "8",
         }
+
+    def set_mem_available_mib(self, mib: int) -> None:
+        self.meminfo.write_text(f"MemTotal: 8388608 kB\nMemAvailable: {mib * 1024} kB\n")
+
+    def run_wrapper(self, command: str) -> tuple[int, str, str]:
+        """Run the wrapper directly (no SSH), for checks on its output."""
+        import subprocess
+
+        result = subprocess.run(
+            [str(WRAPPER)],
+            env={**self.env, "SSH_ORIGINAL_COMMAND": command},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.returncode, result.stdout, result.stderr
 
     async def handle(self, process) -> None:
         self.received_commands.append(process.command)
@@ -254,6 +287,57 @@ async def test_ssh_client_sends_expected_command_syntax(ssh_client, wrapper_serv
         "tux2lab vm install -H my-host -i my-image",
         "tux2lab vm list",
         "tux2lab vm info -H my-host",
+    ]
+
+
+# --- VM size and the free-RAM guard (architecture doc §11) ----------------
+
+
+def test_wrapper_passes_the_image_size_to_tux2lab(wrapper_server):
+    server_state, _port, _key = wrapper_server
+    status, stdout, _ = server_state.run_wrapper("tux2lab vm install -H sized-host -i small-image")
+    assert status == 0
+    assert "VM specs: 1 vCPUs, 1 GiB RAM, 30 GiB disk" in stdout
+
+
+def test_wrapper_without_a_size_keeps_the_tux2lab_default(wrapper_server):
+    server_state, _port, _key = wrapper_server
+    status, stdout, _ = server_state.run_wrapper("tux2lab vm install -H default-host -i image-1")
+    assert status == 0
+    assert "VM specs: 2 vCPUs, 2 GiB RAM, 30 GiB disk" in stdout
+
+
+def test_wrapper_refuses_a_bad_size_in_the_image_map(wrapper_server):
+    server_state, _port, _key = wrapper_server
+    status, _, stderr = server_state.run_wrapper("tux2lab vm install -H odd-host -i bad-size-image")
+    assert status == 126
+    assert "bad image map entry" in stderr
+
+
+def test_wrapper_memory_guard_counts_the_vm_size_plus_reserve(wrapper_server):
+    server_state, _port, _key = wrapper_server
+    # 1 GiB VM + 1024 MiB reserve = 2048 MiB needed.
+    server_state.set_mem_available_mib(2047)
+    status, stdout, _ = server_state.run_wrapper("tux2lab vm install -H tight-host -i small-image")
+    assert status == 75
+    assert "[ERROR] lab host is out of memory: 2047 MiB available, 2048 MiB needed." in stdout
+    server_state.set_mem_available_mib(2048)
+    status, _, _ = server_state.run_wrapper("tux2lab vm install -H tight-host -i small-image")
+    assert status == 0
+
+
+async def test_host_out_of_memory_raises_host_capacity_error(ssh_client, wrapper_server):
+    server_state, _port, _key = wrapper_server
+    server_state.set_mem_available_mib(512)
+    with pytest.raises(HostCapacityError) as exc_info:
+        await ssh_client.install_idempotent("full-host", "image-1")
+    assert exc_info.value.exit_status == 75
+    assert "lab host is out of memory" in str(exc_info.value)
+    # Refused before tux2lab ran: no VM, and no retry or info() lookup.
+    assert await ssh_client.list() == []
+    assert server_state.received_commands == [
+        "tux2lab vm install -H full-host -i image-1",
+        "tux2lab vm list",
     ]
 
 

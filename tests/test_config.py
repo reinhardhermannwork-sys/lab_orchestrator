@@ -3,8 +3,9 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from lab_orchestrator.core.config import MachineConfigError, load_machine_definitions
+from lab_orchestrator.core.config import MachineConfigError, Settings, load_machine_definitions
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REAL_CONFIG = REPO_ROOT / "config" / "machines.yaml"
@@ -205,3 +206,14 @@ machines:
     )
     with pytest.raises(MachineConfigError, match="duplicate machine codename"):
         load_machine_definitions(path)
+
+
+def test_max_active_instances_comes_from_the_environment(monkeypatch):
+    monkeypatch.setenv("LAB_ORCH_MAX_ACTIVE_INSTANCES", "5")
+    assert Settings(_env_file=None).max_active_instances == 5
+
+
+def test_max_active_instances_must_be_at_least_one(monkeypatch):
+    monkeypatch.setenv("LAB_ORCH_MAX_ACTIVE_INSTANCES", "0")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)

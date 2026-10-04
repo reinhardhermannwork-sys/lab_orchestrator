@@ -94,7 +94,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.machines = load_machine_definitions(settings.machines_config_path)
 
     engine = get_engine()
-    init_db(engine)
+    init_db(engine, settings.max_active_instances)
     sync_machine_definitions(engine, app.state.machines)
     app.state.db_engine = engine
 

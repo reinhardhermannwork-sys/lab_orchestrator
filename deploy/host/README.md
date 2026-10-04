@@ -38,8 +38,17 @@ sudo sed -i "s|^TUX2LAB_USER=.*|TUX2LAB_USER=$LAB_USER|; s|^TUX2LAB_BIN=.*|TUX2L
 
 Edit `/etc/lab-orchestrator/images.conf` so every `tux2lab_image` in
 `config/machines.yaml` maps to a golden image the host has
-(`tux2lab golden-image list`). Everything stays root-owned, so the
-`lab-orchestrator` account can't change what it is allowed to run.
+(`tux2lab golden-image list`), with the VM size in the last two columns
+(vCPUs, GiB RAM; 1/1 for SSH-only VMs). Check `RESERVE_MIB` in
+`wrapper.conf`: an install is refused while the host has less than the
+VM's memory plus that reserve available. Everything stays root-owned, so
+the `lab-orchestrator` account can't change what it is allowed to run.
+
+Optional, on a host short of RAM: KSM lets the kernel merge identical
+memory pages, which lab VMs cloned from the same golden image have plenty
+of. It costs a little CPU. Turn it on with
+`echo 1 | sudo tee /sys/kernel/mm/ksm/run` (add it to a boot-time unit to
+keep it) and check the effect later in `/sys/kernel/mm/ksm/pages_sharing`.
 
 ## 2. The account and its key
 

@@ -9,3 +9,8 @@ TUX2LAB_BIN=/usr/local/bin/tux2lab
 
 # Image map, see images.conf.example.
 IMAGES_CONF=/etc/lab-orchestrator/images.conf
+
+# RAM (MiB) that must stay free for the host and its other services, on
+# top of the VM's own memory. An install is refused (exit 75, "lab host is
+# out of memory") when MemAvailable is below VM memory + RESERVE_MIB.
+RESERVE_MIB=1024

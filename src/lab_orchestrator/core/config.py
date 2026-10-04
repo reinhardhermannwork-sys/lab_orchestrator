@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     # quietly running against a fake.
     tux2lab_backend: Literal["auto", "fake", "ssh"] = "auto"
 
+    # How many instances may be active at once, across all users (the DB
+    # trigger in db/models.py). Sized to the host's free RAM, see
+    # architecture doc §17; applied on restart.
+    max_active_instances: int = Field(default=3, ge=1)
+
     # Level for the lab_orchestrator.* loggers, written to stdout (M8) so
     # they show up in `docker logs`.
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"

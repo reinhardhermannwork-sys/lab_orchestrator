@@ -8,18 +8,29 @@ skips tables that already exist; the sync upserts rather than inserts.
 
 from __future__ import annotations
 
+from sqlalchemy import text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
 from lab_orchestrator.core.config import MachineRegistry
-from lab_orchestrator.db.models import machine_definitions, metadata
+from lab_orchestrator.db.models import (
+    MAX_GLOBAL_ACTIVE_TRIGGER,
+    machine_definitions,
+    max_global_active_trigger_sql,
+    metadata,
+)
 
 
-def init_db(engine: Engine) -> None:
-    """Create the schema (tables, constraints, indexes, trigger) if it
-    doesn't already exist. Never drops or alters an existing table.
+def init_db(engine: Engine, max_active_instances: int = 3) -> None:
+    """Create the schema (tables, constraints, indexes) if it doesn't
+    already exist, and (re)create the global-limit trigger with
+    `max_active_instances`. Never drops or alters an existing table.
     """
+    trigger_sql = max_global_active_trigger_sql(max_active_instances)
     metadata.create_all(engine, checkfirst=True)
+    with engine.begin() as conn:
+        conn.execute(text(f"DROP TRIGGER IF EXISTS {MAX_GLOBAL_ACTIVE_TRIGGER}"))
+        conn.execute(text(trigger_sql))
 
 
 def sync_machine_definitions(engine: Engine, machines: MachineRegistry) -> None:

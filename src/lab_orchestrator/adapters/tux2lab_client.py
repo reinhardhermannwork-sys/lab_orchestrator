@@ -102,6 +102,17 @@ class Tux2LabCommandError(Tux2LabError):
         self.stderr = stderr
 
 
+class HostCapacityError(Tux2LabCommandError):
+    """The host wrapper refused an install because the host lacks free
+    RAM for the VM plus its reserve (exit 75, EX_TEMPFAIL; architecture
+    doc §11). Definitive: no VM was created, so it is never retried.
+    """
+
+
+# Exit code the wrapper uses for "host out of memory" (EX_TEMPFAIL).
+HOST_CAPACITY_EXIT = 75
+
+
 class Tux2LabTimeoutError(Tux2LabError):
     """The call timed out with no definitive success/failure signal — the
     specific "ambiguous" case architecture doc §14.4 calls out. Callers
@@ -461,7 +472,10 @@ class SSHTux2LabClient(Tux2LabClient):
         if result.exit_status != 0:
             stderr = str(result.stderr or "")
             detail = _error_lines(stdout) or stderr.strip()
-            raise Tux2LabCommandError(
+            error_cls = (
+                HostCapacityError if result.exit_status == HOST_CAPACITY_EXIT else Tux2LabCommandError
+            )
+            raise error_cls(
                 f"'{command}' exited {result.exit_status}" + (f": {detail}" if detail else ""),
                 exit_status=result.exit_status,
                 stderr=stderr,

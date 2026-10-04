@@ -37,7 +37,7 @@ from starlette.concurrency import run_in_threadpool
 from ulid import ULID
 
 from lab_orchestrator import naming
-from lab_orchestrator.adapters.tux2lab_client import Tux2LabError
+from lab_orchestrator.adapters.tux2lab_client import HostCapacityError, Tux2LabError
 from lab_orchestrator.core.janitor import transition_if
 from lab_orchestrator.core.state_machine import Event, IllegalTransition, InstanceState, next_state
 from lab_orchestrator.db.models import instances, utcnow
@@ -133,7 +133,7 @@ async def create_instance(
         # partial unique index's generic SQLite message instead.
         if "global active-instance quota" in str(exc):
             raise GlobalQuotaExceededError(
-                "3 instances are already active system-wide"
+                "the maximum number of active instances is reached system-wide"
             ) from exc
         raise UserQuotaExceededError(f"user '{user_id}' already has an active instance") from exc
 
@@ -373,6 +373,9 @@ async def provision_instance(
                     return
                 await asyncio.sleep(settings.provisioning_poll_interval_seconds)
 
+        except HostCapacityError as exc:
+            # Shown to the user as-is by the frontend.
+            await _fail(f"The lab is full right now, please try again later. ({exc})")
         except Tux2LabError as exc:
             await _fail(str(exc))
         except (IllegalTransition, _Superseded):

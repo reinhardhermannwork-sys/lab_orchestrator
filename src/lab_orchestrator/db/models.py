@@ -5,8 +5,9 @@ Two DB-level quota guarantees live here as real constraints, not app-level
 
   - one active instance per user: a partial UNIQUE index on
     `instances.user_id`, covering only non-DESTROYED rows
-  - at most 3 active instances globally: a BEFORE INSERT trigger that
-    counts non-DESTROYED rows and aborts the insert past 3
+  - at most N active instances globally (`LAB_ORCH_MAX_ACTIVE_INSTANCES`,
+    default 3): a BEFORE INSERT trigger that counts non-DESTROYED rows and
+    aborts the insert past N
 
 Both rely on SQLite's ordinary single-writer locking to make the
 check-and-insert atomic (see db/database.py for why that's deliberate).
@@ -37,7 +38,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from sqlalchemy import (
-    DDL,
     Boolean,
     CheckConstraint,
     Column,
@@ -48,7 +48,6 @@ from sqlalchemy import (
     String,
     Table,
     Text,
-    event,
     text,
 )
 
@@ -113,18 +112,21 @@ Index(
     sqlite_where=text(ACTIVE_STATE_SQL),
 )
 
-# At most 3 active instances globally (same section). SQLAlchemy Core has
-# no native trigger construct, so this is raw DDL attached to fire right
-# after the table itself is created — idempotent (IF NOT EXISTS) so a
-# repeat `create_all()` on every boot is harmless.
-_max_global_active_trigger = DDL(
-    f"""
-    CREATE TRIGGER IF NOT EXISTS trg_instances_max_global_active
+# At most N active instances globally (same section). SQLAlchemy Core has
+# no native trigger construct, so this is raw SQL. N is a setting (sized to
+# the host's RAM, architecture doc §17), so init_db() drops and recreates
+# the trigger on every boot: a changed limit takes effect on restart.
+MAX_GLOBAL_ACTIVE_TRIGGER = "trg_instances_max_global_active"
+
+
+def max_global_active_trigger_sql(limit: int) -> str:
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+        raise ValueError(f"max active instances must be an integer >= 1, got {limit!r}")
+    return f"""
+    CREATE TRIGGER {MAX_GLOBAL_ACTIVE_TRIGGER}
     BEFORE INSERT ON instances
-    WHEN (SELECT COUNT(*) FROM instances WHERE {ACTIVE_STATE_SQL}) >= 3
+    WHEN (SELECT COUNT(*) FROM instances WHERE {ACTIVE_STATE_SQL}) >= {limit}
     BEGIN
-        SELECT RAISE(ABORT, 'global active-instance quota (3) exceeded');
+        SELECT RAISE(ABORT, 'global active-instance quota ({limit}) exceeded');
     END;
     """
-)
-event.listen(instances, "after_create", _max_global_active_trigger)
