@@ -840,9 +840,15 @@ VPS); with the stand-in told the host has 4 GiB, the install runs as
 `TUX2LAB_STANDIN_HOST_MEM_GIB=4` for later rehearsals (old config in
 `/etc/lab-orchestrator.bak-2026-10-04`).
 
-**Left for step B:** measure the VPS (`nproc`, `free -m`, `df -h`, running
-VMs, container RAM), compute the limit, record it in architecture §17;
-boot a real 1 GiB VM and compare `free -m` before/after.
+**VPS measured (user's output, 2026-10-04):** 8 threads, 15.6 GiB RAM of
+which 4,381 MiB available (two VMs already running, containers ~8 GiB), no
+swap, 133 GB free disk, KSM off. (4,381 − 1,024) / 1,178 → **limit 2**, set
+in `deploy/.env.example`; numbers in architecture §17. RAM is the only
+bottleneck. The VPS has ubuntu-lts 26.04 (not 24.04) as its golden image,
+so the example image map now says 26.04.
+
+**Left for step B:** boot a real 1 GiB VM and compare `free -m`
+before/after.
 
 ## Open questions still outstanding
 

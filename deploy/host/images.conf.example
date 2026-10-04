@@ -13,4 +13,4 @@
 # used over SSH only (architecture doc §17, "Capacity").
 image_1_software_1  almalinux   10     1  1
 image_2_software_2  rocky       9      1  1
-image_3_software_3  ubuntu-lts  24.04  1  1
+image_3_software_3  ubuntu-lts  26.04  1  1
