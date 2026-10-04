@@ -134,7 +134,7 @@ stack (`docker compose … up -d`).
 | `tux2lab vm info -H <h>` | `tux2lab vm info -H <h>` |
 | `tux2lab vm start -H <h>` | `tux2lab vm start -H <h>` |
 | `tux2lab vm remove -H <h>` | `tux2lab vm remove -H <h> -f` |
-| `tux2lab vm install -H <h> -i <image>` | `tux2lab vm install -H <h> -d <distro> -v <version>` |
+| `tux2lab vm install -H <h> -i <image>` | `tux2lab vm install -H <h> -d <distro> -v <version> [--cpu <n> --memory <gib>]`, or exit 75 if the host lacks RAM |
 
 `<h>`: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`; `<image>`:
 `^[A-Za-z0-9_.-]{1,128}$` and listed in `images.conf`. Requests may contain
