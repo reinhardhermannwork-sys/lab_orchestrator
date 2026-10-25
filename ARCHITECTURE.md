@@ -472,6 +472,11 @@ These should be explicit decisions before/while implementing, not discovered mid
 9. **VM login user** — `labuser` (§12) vs. `tux2lab`'s own lab admin user. Verify on the real host in M10.
 10. **No machine-readable `tux2lab` output** — the adapter parses colored text (§11). Fragile across `tux2lab` versions; a `--json` flag would remove the risk.
 11. **Session protocol for tool-controller software** — SSH, or a graphical session (RDP/VNC) through Guacamole? Needed before M11.
+    Still open. A building block for the graphical case exists since 2026-10-25: Fab Suite's tool
+    `sim-screen` (fab-suite `tools/sim-screen/`, `docs/sim-screen.md`) shows a VNC/RDP target
+    through guacd + Guacamole with encrypted JSON auth (same scheme as §13), read-only by default
+    with an explicit "Take control". Tested with the Mercury simulator under Wine (mercury-lab W3,
+    x11vnc). A lease could hand it a target (host, port, password file) instead of a fixed list.
 
 ## 15. Settled decisions (checklist)
 
