@@ -477,6 +477,8 @@ These should be explicit decisions before/while implementing, not discovered mid
     through guacd + Guacamole with encrypted JSON auth (same scheme as §13), read-only by default
     with an explicit "Take control". Tested with the Mercury simulator under Wine (mercury-lab W3,
     x11vnc). A lease could hand it a target (host, port, password file) instead of a fixed list.
+    2026-10-31: the Mercury simulation becomes a lease type of this orchestrator (§18, M13); its
+    screens use VNC through `sim-screen`, with the lease's container as the target.
 
 ## 15. Settled decisions (checklist)
 
@@ -582,3 +584,76 @@ VPS (host)
   - **Result:** (4,381 − 1,024) / 1,178 = 2.8 → **limit 2**. CPU (8 threads for 1-vCPU VMs) and disk (~3 GiB per new VM out of 133 GB) are not the bottleneck. More slots need more free RAM, e.g. stopping a VM that isn't needed (a 2 GiB VM frees about two slots).
 
 See `IMPLEMENTATION_PLAN.md` M8 (container packaging) and M10 (host wrapper + real `tux2lab`).
+
+## 18. Providers: the Mercury simulation (M13, planned 2026-10-31)
+
+**Why.** A lease exists to run a configured machine and simulate its operation. Fab Suite's simulation of the
+Mercury spray processor (twin **MERCSC0000**, mercury-lab + mercury-reference) had grown its own one-off launcher
+(`mercury-lab w3/sim_launcher.py`), with the problems this orchestrator already solves for VMs: a run that loses its
+SECS link stays "running" forever, the launcher stays busy for 30 min after an abort, runs are JSON notes with
+repeating names, and only one sim can run at a time. Decided with the user on 2026-10-31: the simulation backend
+**is** this orchestrator, with a second provider next to tux2lab.
+
+**Decisions (user, 2026-10-31):**
+- **Lease = machine session.** A simulated MERCSC0000 is up (Mercury under Wine, its own plant simulator msim,
+  screens over VNC) for one person and case until released or expired. Recipes run on it one after another as
+  **runs** inside the lease.
+- **Host access as for tux2lab:** SSH to a host account whose key runs only the restricted wrapper; the wrapper
+  allowlists the verbs of a host CLI `mercury-sim` (mercury-lab). No Docker socket in the orchestrator container.
+- **Own instance on the test VM** with only the Mercury machine type, next to Fab Suite. The VPS instance (tux2lab
+  VMs) is unchanged.
+
+### Provider per machine type
+
+`machines.yaml` names a `provider` per machine (`tux2lab`, the default, or `mercury-sim`); the image is resolved by
+the host, as VM sizes are today (§3):
+
+```yaml
+machines:
+  mercsc0000:
+    display_name: "Mercury MERCSC0000 (simulation)"
+    code: "mrc"
+    codename: "mercury"
+    provider: "mercury-sim"
+    image: "mercsc0000-v1.2"     # host images.conf: mercury-reference v1.2, mercury-wine:w3-w11s3, msim:r9
+    protocol: "vnc"
+    probe_port: 5900             # readiness probe (VNC of the HMI) instead of TCP/22
+    lifetime_hours: 4
+```
+
+The adapter interface of §11 becomes the generic provider (`install / list / info / start / remove`, plus
+`run / runs` for providers that have runs); `Tux2LabClient` is one implementation, `MercurySimClient` the other
+(same SSH transport, JSON output instead of parsed text). The orchestrator keeps one client per provider; the
+instance manager, janitor and reconcile take it from the lease's machine. Each provider has its own active limit
+(`LAB_ORCH_MAX_ACTIVE_<PROVIDER>`, counted by the DB trigger per provider).
+
+### A simulation lease through the state machine (§6, unchanged events)
+
+| State | tux2lab VM | Mercury simulation |
+|---|---|---|
+| PROVISIONING | `vm install` | `mercury-sim install -H <lease> -i <image> [--setup JSON]`: lease folder with Mercury's files and the machine setup applied once (Mercury reads its configuration at start), its own copy of the msim description |
+| STARTING | `vm start` | `mercury-sim start`: containers `<lease>-msim` and `<lease>` (Mercury, VNC), labelled with the lease |
+| WAITING_READY → READY | running + healthy + TCP/22 | running, `os_state` healthy only when the SECS host is **online**, plus TCP on `probe_port` |
+| DESTROYING | `vm remove` | `mercury-sim remove`: both containers stopped; the lease folder is kept (recordings), not deleted |
+| FAILED → CLEANUP | install/boot error | also the **watchdog**: SECS link lost or Mercury gone → failed with that reason instead of hanging |
+
+### Runs inside a lease
+
+New table `runs` (ULID id, instance id, recipe, state `queued | running | done | failed`, started/ended, result,
+recording paths) and `POST/GET /v1/instances/{id}/runs`. The host CLI starts a recipe in the running Mercury
+(`mercury-sim run -H <lease> -r RECIPE`); inside the container the SECS host stays online between recipes and
+takes them one by one. Fab Suite saves each run's recording to the case.
+
+### Several at once
+
+Each lease has its own containers, msim and folder; only the Babelfish DB container and the Docker network are
+shared. CPU is the limit (an idle Mercury takes about 1.8 of the test VM's 4 cores), so the provider limit is set
+from a measurement with two leases; the wrapper refuses with exit 75 when the host lacks CPU or RAM, and the lease
+fails with "the lab is full", as for VMs.
+
+### Open / risks
+
+- Mercury has so far run one recipe per start. Checked first by hand; fallback: one Mercury start per run inside
+  the same lease.
+- Session protocol for the simulation is VNC through Fab Suite's `sim-screen` (§14.11); Guacamole for VM leases
+  (M11) stays separate.

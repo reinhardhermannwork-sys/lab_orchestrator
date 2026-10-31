@@ -877,3 +877,14 @@ exception types before writing assertions about them, and an exhaustive
 rather than spot-check sweep for M3's transition table. Two real bugs
 were caught this way (the `pydantic-settings` env var name in M1) that a
 narrower "does the test pass" check would have missed.
+
+---
+
+## M13 — Mercury simulation provider (planned 2026-10-31)
+
+Fab Suite's Mercury simulation ran from its own one-off launcher (mercury-lab `w3/sim_launcher.py`). It kept
+showing the problems this orchestrator was built for: a run that loses its SECS link stays "running", the launcher
+is busy for 30 min after an abort, runs have no records, and only one sim can run. The user's point: a VM lease
+exists to run a configured machine and simulate it, so it is the same thing. Decided in plan mode: lease = machine
+session (several recipes as runs inside it), host access through the same SSH wrapper pattern, an own instance on
+the test VM. Architecture §18; steps SP0–SP6 in `IMPLEMENTATION_PLAN.md` M13. SP0 (docs) done.

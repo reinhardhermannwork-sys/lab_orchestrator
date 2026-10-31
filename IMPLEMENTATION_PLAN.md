@@ -175,6 +175,17 @@ Run the whole stack without a KVM host: the orchestrator in its normal `ssh` mod
 - Orchestrator-side: an internal endpoint that moves the referenced instance (via `guacamole_connection_id`) to `DISCONNECTED_GRACE`.
 - **Done when:** closing a browser tab mid-session is observed to trigger the 5-minute grace countdown without any frontend polling.
 
+### M13 — Mercury simulation provider *(planned 2026-10-31; architecture doc §18)*
+The simulation backend of Fab Suite becomes a lease type of this orchestrator. Steps (docs first, tests and a local commit per step; push only on request):
+- **SP0 — docs:** architecture §18, this milestone; mercury-lab `docs/sim-host.md` (host CLI contract); a pointer in fab-suite `docs/sim-control.md`.
+- **SP1 — providers in the orchestrator:** the §11 adapter becomes a generic provider (`Tux2LabClient` one implementation, `FakeMercurySimProvider` for tests); one client per provider chosen by the machine's `provider`; `MachineDefinition` gets `provider`, `image` (alias of `tux2lab_image`), `probe_port`, `lifetime_hours`, `protocol: ssh | vnc`; instances get `case_id`, `setup_json`, `provider`; the active limit is counted per provider; new `runs` table and `POST/GET /v1/instances/{id}/runs`; watchdog in the janitor (provider reports link lost / gone → FAILED with reason). All existing tests stay green.
+- **SP2 — host CLI (mercury-lab `w3/mercury_sim.py`):** `install / list / info / start / remove / run / runs`, JSON output, exit 75 for capacity; per-lease folder, containers and msim (no global name, file or run-number scan); Mercury's container in session mode (SECS host stays online, takes recipes one by one). Tests with a fake docker.
+- **SP3 — wrapper on the test VM:** `deploy/host/lab-orchestrator-wrapper` allowlists per CLI (tux2lab | mercury-sim), CPU + MemAvailable check (exit 75); `images.conf` row `mercsc0000-v1.2`; a `lab-orchestrator` account with `restrict,command=` and a sudoers line; `deploy/host/README.md`.
+- **SP4 — instance on the test VM:** `deploy/compose.sim.yaml` (internal only, on Fab Suite's network, only `mercsc0000`). Curl walkthrough: lease → READY → run WASHDOWN → done → second run → release → DESTROYED; restart mid-run is reconciled.
+- **SP5 — Fab Suite switch:** sim-screen's `api/sim` uses this API (lease per case and person, runs, release); screen targets, live view and blob viewer follow the lease instead of a fixed container and "the newest run".
+- **SP6 — proof:** two leases in parallel (measure CPU/RAM → provider limit); SECS link killed → lease FAILED with reason, nothing hangs; no 30-min wait after an abort; then the old `sim-launcher` unit is stopped.
+- **Done when:** SP4's walkthrough and SP6's parallel and fault runs pass on the test VM, and the Fab Suite Simulation pane drives a lease end to end.
+
 ## 3. Cross-cutting concerns
 
 - **Config/secrets:** all host paths, SSH connection details, and the secrets directory path come from environment variables / a settings module — never hardcoded.
