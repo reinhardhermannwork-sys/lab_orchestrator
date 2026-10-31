@@ -1,13 +1,16 @@
-"""Table definitions (architecture doc §9): machine_definitions, instances.
+"""Table definitions (architecture doc §9, §18): machine_definitions,
+instances, runs.
 
 Two DB-level quota guarantees live here as real constraints, not app-level
 `if` checks (implementation plan §M2 / architecture doc §14 point 1):
 
   - one active instance per user: a partial UNIQUE index on
     `instances.user_id`, covering only non-DESTROYED rows
-  - at most N active instances globally (`LAB_ORCH_MAX_ACTIVE_INSTANCES`,
-    default 3): a BEFORE INSERT trigger that counts non-DESTROYED rows and
-    aborts the insert past N
+  - at most N active instances per provider, across all users: one
+    BEFORE INSERT trigger per provider that counts that provider's
+    non-DESTROYED rows and aborts the insert past N
+    (`LAB_ORCH_MAX_ACTIVE_INSTANCES`, default 3, for tux2lab;
+    `LAB_ORCH_MAX_ACTIVE_MERCURY_SIM`, default 1, for mercury-sim -- M13)
 
 Both rely on SQLite's ordinary single-writer locking to make the
 check-and-insert atomic (see db/database.py for why that's deliberate).
@@ -51,6 +54,7 @@ from sqlalchemy import (
     text,
 )
 
+from lab_orchestrator.adapters.provider import PROVIDERS, RUN_STATES
 from lab_orchestrator.core.state_machine import InstanceState
 
 
@@ -77,7 +81,7 @@ machine_definitions = Table(
     Column("display_name", String, nullable=False),
     Column("code", String, nullable=False, unique=True),
     Column("codename", String, nullable=False, unique=True),
-    Column("tux2lab_image", String, nullable=False),
+    Column("tux2lab_image", String, nullable=False),  # the machine's `image` (any provider)
     Column("protocol", String, nullable=False),
     Column("enabled", Boolean, nullable=False, default=True),
 )
@@ -98,9 +102,44 @@ instances = Table(
     Column("guacamole_connection_id", String, nullable=True),
     Column("destroyed_at", DateTime, nullable=True),
     Column("failure_reason", Text, nullable=True),
+    # M13 (architecture doc §18). Added to an older DB by init_db().
+    # `provider` is copied from the machine at creation, so cleanup still
+    # finds the right client if machines.yaml changes later.
+    Column("provider", String, nullable=False, server_default=text("'tux2lab'")),
+    Column("case_id", String, nullable=True),  # Fab Suite case the lease serves
+    Column("setup_json", Text, nullable=True),  # machine setup given at creation
     CheckConstraint(
         "state IN (" + ", ".join(repr(s.value) for s in InstanceState) + ")",
         name="ck_instances_state_valid",
+    ),
+)
+
+# Columns init_db() adds to an `instances` table created before M13, as
+# (name, SQLite column definition).
+INSTANCES_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("provider", "VARCHAR NOT NULL DEFAULT 'tux2lab'"),
+    ("case_id", "VARCHAR"),
+    ("setup_json", "TEXT"),
+)
+
+# Runs inside a lease (M13, architecture doc §18): a recipe on a simulated
+# tool. The id is a ULID the orchestrator assigns and hands to the host,
+# so the host's run folder and this row share it.
+runs = Table(
+    "runs",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("instance_id", String, ForeignKey("instances.id"), nullable=False, index=True),
+    Column("recipe", String, nullable=False),
+    Column("state", String, nullable=False),
+    Column("created_at", DateTime, nullable=False),
+    Column("started_at", String, nullable=True),  # as the host reports it (ISO 8601)
+    Column("ended_at", String, nullable=True),
+    Column("result", Text, nullable=True),
+    Column("blobs_json", Text, nullable=True),  # JSON list of recording paths
+    CheckConstraint(
+        "state IN (" + ", ".join(repr(s) for s in RUN_STATES) + ")",
+        name="ck_runs_state_valid",
     ),
 )
 
@@ -112,21 +151,34 @@ Index(
     sqlite_where=text(ACTIVE_STATE_SQL),
 )
 
-# At most N active instances globally (same section). SQLAlchemy Core has
-# no native trigger construct, so this is raw SQL. N is a setting (sized to
-# the host's RAM, architecture doc §17), so init_db() drops and recreates
-# the trigger on every boot: a changed limit takes effect on restart.
+# At most N active instances per provider (same section). SQLAlchemy Core
+# has no native trigger construct, so this is raw SQL. N is a setting
+# (sized to the host, architecture doc §17/§18), so init_db() drops and
+# recreates the triggers on every boot: a changed limit takes effect on
+# restart. The message keeps its pre-M13 "global active-instance quota"
+# wording ("global" = across all users), which instance_manager matches.
+MAX_ACTIVE_TRIGGER_PREFIX = "trg_instances_max_active_"
+
+# The single pre-M13 trigger; init_db() drops it.
 MAX_GLOBAL_ACTIVE_TRIGGER = "trg_instances_max_global_active"
 
 
-def max_global_active_trigger_sql(limit: int) -> str:
+def max_active_trigger_name(provider: str) -> str:
+    return MAX_ACTIVE_TRIGGER_PREFIX + provider.replace("-", "_")
+
+
+def max_active_trigger_sql(provider: str, limit: int) -> str:
+    if provider not in PROVIDERS:
+        raise ValueError(f"unknown provider {provider!r}")
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
         raise ValueError(f"max active instances must be an integer >= 1, got {limit!r}")
     return f"""
-    CREATE TRIGGER {MAX_GLOBAL_ACTIVE_TRIGGER}
+    CREATE TRIGGER {max_active_trigger_name(provider)}
     BEFORE INSERT ON instances
-    WHEN (SELECT COUNT(*) FROM instances WHERE {ACTIVE_STATE_SQL}) >= {limit}
+    WHEN NEW.provider = '{provider}' AND (
+        SELECT COUNT(*) FROM instances WHERE {ACTIVE_STATE_SQL} AND provider = '{provider}'
+    ) >= {limit}
     BEGIN
-        SELECT RAISE(ABORT, 'global active-instance quota ({limit}) exceeded');
+        SELECT RAISE(ABORT, 'global active-instance quota ({limit}) exceeded for {provider}');
     END;
     """

@@ -100,6 +100,8 @@ uppercased, or a `.env` file in the repo root. Currently defined:
 | `LAB_ORCH_TUX2LAB_SSH_COMMAND_TIMEOUT` | `30.0` | M4/M5 |
 | `LAB_ORCH_TUX2LAB_SSH_INSTALL_TIMEOUT` | `600.0` | M10 — `vm install` only (disk clone) |
 | `LAB_ORCH_MAX_ACTIVE_INSTANCES` | `3` | Capacity — active instances across all users; size it to the host's free RAM (architecture doc §17), applied on restart |
+| `LAB_ORCH_MAX_ACTIVE_MERCURY_SIM` | `1` | M13 — active Mercury simulation leases across all users; CPU-bound (architecture doc §18), applied on restart |
+| `LAB_ORCH_MERCURY_SIM_BACKEND` | `fake` | M13 — the mercury-sim client; only `fake` until the host CLI and wrapper exist (SP2/SP3). Built only when machines.yaml has a `provider: mercury-sim` machine |
 | `LAB_ORCH_LEASE_LIFETIME_HOURS` | `4.0` | M5 — architecture doc §7's own number, not a guess |
 | `LAB_ORCH_PROVISIONING_POLL_INTERVAL_SECONDS` | `2.0` | M5 — this module's own judgment call; not specified in the doc |
 | `LAB_ORCH_PROVISIONING_TIMEOUT_SECONDS` | `300.0` | M5 — same |
@@ -234,20 +236,22 @@ module itself, summarized here:
 src/lab_orchestrator/
 ├── main.py                  # FastAPI app factory, startup/shutdown hooks
 ├── api/
-│   ├── routes_instances.py  # POST/GET /v1/instances
+│   ├── routes_instances.py  # POST/GET /v1/instances, .../{id}/runs (M13)
 │   └── schemas.py           # Pydantic request/response models
 ├── core/
 │   ├── config.py            # env vars, paths, loaded machine defs
 │   ├── state_machine.py     # states + legal transitions
 │   ├── instance_manager.py  # business logic: create/get, provisioning driver
-│   ├── janitor.py           # async background cleanup loop
-│   └── reconcile.py         # startup reconciliation against tux2lab
+│   ├── janitor.py           # async background loop: watchdog, runs sync, cleanup
+│   └── reconcile.py         # startup reconciliation, per provider
 ├── db/
 │   ├── models.py            # table definitions
 │   ├── database.py          # connection/session handling
 │   └── init_db.py           # schema creation
 ├── adapters/
-│   ├── tux2lab_client.py    # SSH/subprocess adapter to the CLI
+│   ├── provider.py          # generic MachineProvider + ProviderRegistry (M13)
+│   ├── tux2lab_client.py    # tux2lab provider: SSH adapter to the CLI
+│   ├── mercury_sim.py       # Mercury simulation provider (fake so far, M13)
 │   └── guacamole_client.py  # JSON-auth token builder (deferred)
 └── naming.py                # opaque hostname generation
 ```
@@ -351,6 +355,11 @@ scope and which milestone fills it in.
       setup guide and text-parsing adapter done (`deploy/host/`); rehearsed
       on the test VM against `deploy/host/stand-in/tux2lab`. Real host
       still open. See `deploy/host/README.md` and `PROGRESS.md`.
+- [ ] **M13 — Mercury simulation provider** (architecture doc §18). SP0
+      docs and SP1 done: providers (`adapters/provider.py`,
+      `adapters/mercury_sim.py`, fake only), `runs` table and
+      `POST/GET /v1/instances/{id}/runs`, watchdog in the janitor,
+      per-provider limits. Next: SP2, the host CLI in mercury-lab.
 - [ ] M10b — Emulation mode (an emulated tux2lab host container; planned)
 - [ ] M11 — Guacamole JSON-auth adapter
 - [ ] M12 — Guacamole tunnel-close listener *(separate Java project)*

@@ -1,5 +1,8 @@
 # Lab Orchestrator — Progress Log
 
+**Update 2026-10-31:** M13 (Mercury simulation provider) SP0 + SP1 done, 211 tests passing — see the M13 section
+at the end.
+
 **Status as of this writing:** M0–M9 complete (of M0–M12; M8 verified on
 the test VM, M9 on the VPS behind traefik + authentik). M10 in progress:
 wrapper and adapter done and rehearsed on the test VM against a tux2lab
@@ -888,3 +891,43 @@ is busy for 30 min after an abort, runs have no records, and only one sim can ru
 exists to run a configured machine and simulate it, so it is the same thing. Decided in plan mode: lease = machine
 session (several recipes as runs inside it), host access through the same SSH wrapper pattern, an own instance on
 the test VM. Architecture §18; steps SP0–SP6 in `IMPLEMENTATION_PLAN.md` M13. SP0 (docs) done.
+
+### SP1 — providers in the orchestrator (2026-10-31)
+
+- `adapters/provider.py`: the §11 interface is now the generic `MachineProvider`, with the data shapes, exceptions
+  and input checks that used to live in `tux2lab_client.py`. It has two optional abilities, a machine setup on
+  `install` and runs (`run`/`runs`), plus a `watchdog` flag. `tux2lab_client.py` keeps its old names as aliases,
+  so `except Tux2LabError` still catches everything. `ProviderRegistry` holds one client per provider name.
+- `adapters/mercury_sim.py`: `MercurySimProvider` (setup, runs, watchdog) and `FakeMercurySimProvider`. The fake
+  speaks the host CLI's states (sim-host.md: `created/running/exited`, `starting/healthy/link-lost/n/a`), and its
+  runs advance one step per read. Test hooks: `link_lost`, `mercury_gone`, `set_run`. The SSH client is not here
+  yet. It needs the host CLI (SP2) and its wrapper (SP3), so `LAB_ORCH_MERCURY_SIM_BACKEND` accepts only `fake`.
+- Config: a machine gets `provider` (default tux2lab), `image` (the old `tux2lab_image` is still accepted; giving
+  both is an error), `protocol: ssh | vnc`, `probe_port` (default 22), and `lifetime_hours`.
+  `config/machines.sim.yaml` holds `mercsc0000` for the test VM instance (SP4).
+- DB: instances gain `provider`, `case_id`, `setup_json`. `init_db` adds these columns to an older DB, so the VPS DB
+  upgrades in place. The single global trigger becomes one trigger per provider (`LAB_ORCH_MAX_ACTIVE_INSTANCES`
+  stays tux2lab's; `LAB_ORCH_MAX_ACTIVE_MERCURY_SIM`, default 1). New table `runs`, whose ULID the orchestrator
+  assigns and passes to the host.
+- Provisioning takes the client from the lease's provider. It passes the setup to `install` and probes the
+  machine's `probe_port`. It now probes only once the machine reports running + healthy, because a sim's VNC port
+  answers before its SECS host is online. A tux2lab VM has no IP before then, so VMs behave as before.
+- API: `POST /v1/instances` takes `case_id` and `setup` (400 for a machine without setup). The instance response
+  gains `provider`, `protocol`, `port` and `case_id`; `ssh` is filled only for protocol ssh. New endpoints:
+  `POST/GET /v1/instances/{id}/runs`. A run is 202 queued; 400 for a VM or a bad recipe name, 409 if the lease is
+  not READY or a run is still going, 404 for someone else's lease, 502 if the host fails. The row is written before
+  the host is asked, so an accepted run is never missing; a refusal is kept as a failed run with its reason.
+- Janitor pass = watchdog → runs sync → cleanup. Watchdog (only for watchdog providers, so VM leases behave as
+  before): a lease whose machine is gone, stopped, or `link-lost` goes FAILED with the reason ("SECS link lost") →
+  CLEANUP and is removed in the same pass. An unreachable host is not a reason; the next pass checks again. Runs
+  sync copies the host's view of unfinished runs; runs of an ended lease are failed with "lease ended (…)".
+- Reconcile lists each provider on its own; one unreachable provider skips only its own checks.
+
+**Verified:** 211 tests pass (184 existing, unchanged in substance; only the call arguments `tux2lab=` →
+`providers=` changed), `ruff` clean. The new file passed 15 of 15 runs; the only failure seen was the known flaky
+`test_hostnames_do_not_collide_in_practice` (here 5 of 30 runs, untouched by SP1). New `tests/test_mercury_sim.py` (27 tests) covers: config,
+per-provider limits, upgrade of a pre-M13 DB, the provider checks, a sim lease to READY (setup, case, VNC probe only
+once online, the machine's 4 h lifetime), never-online → FAILED, runs one after another, a refused run, run rules,
+the watchdog for each of three faults (lease and run failed, slot free at once), the watchdog leaving healthy,
+unreachable and VM leases alone, reconcile per provider, and the SP4 walkthrough through the API against the fake
+(lease → READY → run → done → second run → release → DESTROYED, the open run failed "lease ended").

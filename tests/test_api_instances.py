@@ -248,12 +248,12 @@ def test_release_by_owner_then_janitor_destroys_and_frees_quota(fast_settings, r
 
         destroyed = client.portal.call(
             lambda: janitor.run_once(
-                engine=app.state.db_engine, tux2lab=app.state.tux2lab, settings=app.state.settings
+                engine=app.state.db_engine, providers=app.state.providers, settings=app.state.settings
             )
         )
         assert destroyed == 1
         assert client.get(f"/v1/instances/{instance_id}").json()["state"] == "DESTROYED"
-        assert client.portal.call(app.state.tux2lab.list) == []
+        assert client.portal.call(app.state.providers.get("tux2lab").list) == []
 
         # The user's quota slot is free again.
         assert client.get("/v1/instances", params={"user": "hermann"}).json() == []

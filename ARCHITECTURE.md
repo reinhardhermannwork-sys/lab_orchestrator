@@ -585,7 +585,7 @@ VPS (host)
 
 See `IMPLEMENTATION_PLAN.md` M8 (container packaging) and M10 (host wrapper + real `tux2lab`).
 
-## 18. Providers: the Mercury simulation (M13, planned 2026-10-31)
+## 18. Providers: the Mercury simulation (M13, planned 2026-10-31; SP1 built)
 
 **Why.** A lease exists to run a configured machine and simulate its operation. Fab Suite's simulation of the
 Mercury spray processor (twin **MERCSC0000**, mercury-lab + mercury-reference) had grown its own one-off launcher
@@ -627,6 +627,12 @@ The adapter interface of §11 becomes the generic provider (`install / list / in
 instance manager, janitor and reconcile take it from the lease's machine. Each provider has its own active limit
 (`LAB_ORCH_MAX_ACTIVE_<PROVIDER>`, counted by the DB trigger per provider).
 
+*As built (SP1):* `adapters/provider.py` (`MachineProvider`, `ProviderRegistry`), `adapters/mercury_sim.py` (the
+fake only, until SP2/SP3). Limits: `LAB_ORCH_MAX_ACTIVE_INSTANCES` stays tux2lab's, and
+`LAB_ORCH_MAX_ACTIVE_MERCURY_SIM` (default 1) is the sim's. A lease row carries its `provider`, so cleanup still
+finds the client after machines.yaml changes. Only providers named in machines.yaml get a client. The readiness
+probe runs only once the machine reports running + healthy.
+
 ### A simulation lease through the state machine (§6, unchanged events)
 
 | State | tux2lab VM | Mercury simulation |
@@ -640,7 +646,8 @@ instance manager, janitor and reconcile take it from the lease's machine. Each p
 ### Runs inside a lease
 
 New table `runs` (ULID id, instance id, recipe, state `queued | running | done | failed`, started/ended, result,
-recording paths) and `POST/GET /v1/instances/{id}/runs`. The host CLI starts a recipe in the running Mercury
+recording paths) and `POST/GET /v1/instances/{id}/runs` (both with the owner's `user`; POST 202 queued, 409 while the lease is not READY
+or a run is going, 400 for a VM, 502 when the host fails; GET re-reads the host first). The host CLI starts a recipe in the running Mercury
 (`mercury-sim run -H <lease> -r RECIPE`); inside the container the SECS host stays online between recipes and
 takes them one by one. Fab Suite saves each run's recording to the case.
 

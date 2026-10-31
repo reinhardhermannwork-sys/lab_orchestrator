@@ -7,6 +7,7 @@ from datetime import timedelta
 import pytest
 import sqlalchemy as sa
 
+from lab_orchestrator.adapters.provider import ProviderRegistry
 from lab_orchestrator.adapters.tux2lab_client import (
     FakeTux2LabClient,
     Tux2LabCommandError,
@@ -81,7 +82,7 @@ async def test_expired_lease_is_destroyed_and_vm_removed(engine, settings):
         hostname="lab-m01-aurora-test1",
     )
 
-    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    assert await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 1
     assert row_of(engine, "expired")["state"] == InstanceState.DESTROYED.value
     assert await tux2lab.list() == []
 
@@ -96,7 +97,7 @@ async def test_unexpired_disconnect_grace_is_left_alone(engine, settings):
         disconnect_since=utcnow() - timedelta(seconds=299),
     )
 
-    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 0
+    assert await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 0
     assert row_of(engine, "grace")["state"] == InstanceState.DISCONNECTED_GRACE.value
 
 
@@ -110,7 +111,7 @@ async def test_expired_disconnect_grace_is_destroyed(engine, settings):
         disconnect_since=utcnow() - timedelta(seconds=301),
     )
 
-    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    assert await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 1
     assert row_of(engine, "grace-expired")["state"] == InstanceState.DESTROYED.value
 
 
@@ -126,7 +127,7 @@ async def test_destroying_instance_is_retried(engine, settings):
         hostname="lab-m01-aurora-retry1",
     )
 
-    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    assert await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 1
     assert row_of(engine, "retry")["state"] == InstanceState.DESTROYED.value
 
 
@@ -143,7 +144,7 @@ async def test_cleanup_failure_leaves_destroying_for_retry(engine, settings):
         hostname="lab-m01-aurora-fail1",
     )
 
-    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 0
+    assert await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 0
     assert row_of(engine, "cleanup-fails")["state"] == InstanceState.DESTROYING.value
     assert await tux2lab.info("lab-m01-aurora-fail1")
 
@@ -161,7 +162,7 @@ async def test_cleanup_instance_is_finished(engine, settings):
         hostname="lab-m01-aurora-clean1",
     )
 
-    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    assert await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 1
     row = row_of(engine, "cleanup")
     assert row["state"] == InstanceState.DESTROYED.value
     assert row["destroyed_at"] is not None
@@ -180,10 +181,10 @@ async def test_cleanup_remove_failure_leaves_cleanup_for_retry(engine, settings)
         hostname="lab-m01-aurora-clean2",
     )
 
-    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 0
+    assert await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 0
     assert row_of(engine, "cleanup-retry")["state"] == InstanceState.CLEANUP.value
 
-    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    assert await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 1
     assert row_of(engine, "cleanup-retry")["state"] == InstanceState.DESTROYED.value
 
 
@@ -199,7 +200,7 @@ async def test_failed_instance_is_not_touched(engine, settings):
         expires_at=utcnow() - timedelta(seconds=1),
     )
 
-    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 0
+    assert await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 0
     assert row_of(engine, "failing")["state"] == InstanceState.FAILED.value
 
 
@@ -212,7 +213,7 @@ async def test_expired_instance_without_vm_is_destroyed(engine, settings):
         expires_at=utcnow() - timedelta(seconds=1),
     )
 
-    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    assert await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 1
     assert row_of(engine, "never-provisioned")["state"] == InstanceState.DESTROYED.value
 
 
@@ -240,7 +241,7 @@ async def test_claim_uses_fresh_row_not_stale_candidate(engine, settings, monkey
     )
     stale_candidates(monkeypatch, ("fresh", {"vm_hostname": None}))
 
-    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    assert await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 1
     assert await tux2lab.list() == []
 
 
@@ -255,7 +256,7 @@ async def test_row_that_moved_on_is_left_alone(engine, settings, monkeypatch):
     # Janitor thinks it's still READY; the guarded UPDATE must not match.
     stale_candidates(monkeypatch, ("moved", {"state": InstanceState.READY.value}))
 
-    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 0
+    assert await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 0
     assert row_of(engine, "moved")["state"] == InstanceState.CONNECTED.value
 
 
@@ -280,7 +281,7 @@ async def test_unexpected_error_on_one_row_does_not_stop_the_pass(engine, settin
 
     monkeypatch.setattr(tux2lab, "remove_idempotent", remove)
 
-    assert await run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    assert await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 1
     assert row_of(engine, "ok")["state"] == InstanceState.DESTROYED.value
     assert row_of(engine, "boom")["state"] == InstanceState.DESTROYING.value
 
@@ -295,6 +296,6 @@ async def test_destroyed_at_is_recorded(engine, settings):
     )
     before = utcnow()
 
-    await run_once(engine=engine, tux2lab=tux2lab, settings=settings)
+    await run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings)
 
     assert row_of(engine, "stamped")["destroyed_at"] >= before

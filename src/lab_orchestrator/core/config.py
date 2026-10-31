@@ -21,8 +21,10 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from lab_orchestrator.adapters.provider import ProviderName
 
 # --- Settings ---------------------------------------------------------
 
@@ -69,10 +71,25 @@ class Settings(BaseSettings):
     # quietly running against a fake.
     tux2lab_backend: Literal["auto", "fake", "ssh"] = "auto"
 
-    # How many instances may be active at once, across all users (the DB
-    # trigger in db/models.py). Sized to the host's free RAM, see
-    # architecture doc §17; applied on restart.
+    # Which client main.py wires in for the mercury-sim provider (M13,
+    # architecture doc §18), when machines.yaml uses it. Only the fake
+    # exists until the host CLI and its wrapper do (M13 SP2/SP3).
+    mercury_sim_backend: Literal["fake"] = "fake"
+
+    # How many instances may be active at once, across all users, per
+    # provider (the DB triggers in db/models.py); applied on restart.
+    # tux2lab's limit is sized to the host's free RAM (architecture doc
+    # §17) and keeps its pre-M13 name; mercury-sim's to the host's CPU
+    # (§18: an idle Mercury takes ~1.8 of the test VM's 4 cores).
     max_active_instances: int = Field(default=3, ge=1)
+    max_active_mercury_sim: int = Field(default=1, ge=1)
+
+    def provider_limits(self) -> dict[str, int]:
+        """Active-instance limit per provider name (db/models.py)."""
+        return {
+            "tux2lab": self.max_active_instances,
+            "mercury-sim": self.max_active_mercury_sim,
+        }
 
     # Level for the lab_orchestrator.* loggers, written to stdout (M8) so
     # they show up in `docker logs`.
@@ -111,12 +128,38 @@ class MachineDefinition(BaseModel):
     display_name: str
     code: str = Field(pattern=r"^[a-z0-9]+$")
     codename: str = Field(pattern=r"^[a-z0-9]+$")
-    tux2lab_image: str = Field(min_length=1)
-    # SSH only for v1 (architecture doc §15: "SSH first; RDP later"). The
-    # field exists for future protocols, but any other value today is a
-    # config error, not something the rest of the system would handle.
-    protocol: Literal["ssh"]
+    # Which provider builds this machine (architecture doc §18).
+    provider: ProviderName = "tux2lab"
+    # The provider's image name; the host resolves it (sizes, versions).
+    # `tux2lab_image` is its pre-M13 name and still accepted.
+    image: str = Field(min_length=1, validation_alias=AliasChoices("image", "tux2lab_image"))
+    # ssh: a VM reached over SSH (architecture doc §15: "SSH first; RDP
+    # later"); vnc: a simulated tool's screens (§18, through Fab Suite's
+    # sim-screen). Anything else is a config error.
+    protocol: Literal["ssh", "vnc"]
+    # The TCP port the readiness probe connects to (22 for SSH, the HMI's
+    # VNC port for a Mercury simulation).
+    probe_port: int = Field(default=22, ge=1, le=65535)
+    # This machine's lease lifetime; None = Settings.lease_lifetime_hours.
+    lifetime_hours: float | None = Field(default=None, gt=0)
     enabled: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _one_image_name(cls, data: object) -> object:
+        if isinstance(data, dict) and "image" in data and "tux2lab_image" in data:
+            raise ValueError("give `image` or its old name `tux2lab_image`, not both")
+        return data
+
+    @property
+    def tux2lab_image(self) -> str:
+        """Pre-M13 name of `image`."""
+        return self.image
+
+    def lease_lifetime_hours(self, settings: Settings) -> float:
+        if self.lifetime_hours is not None:
+            return self.lifetime_hours
+        return settings.lease_lifetime_hours
 
 
 class MachineConfigError(ValueError):
@@ -140,6 +183,12 @@ class MachineRegistry:
             return self._machines[machine_type]
         except KeyError:
             raise KeyError(f"unknown machine_type '{machine_type}'") from None
+
+    def providers(self) -> set[str]:
+        """Every provider a machine names, enabled or not -- main.py
+        builds a client for each, since a disabled machine may still have
+        leases to clean up."""
+        return {m.provider for m in self._machines.values()}
 
     def list_enabled(self) -> list[MachineDefinition]:
         return [m for m in self._machines.values() if m.enabled]

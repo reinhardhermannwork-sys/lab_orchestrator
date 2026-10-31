@@ -9,6 +9,7 @@ from datetime import timedelta
 import pytest
 import sqlalchemy as sa
 
+from lab_orchestrator.adapters.provider import ProviderRegistry
 from lab_orchestrator.adapters.tux2lab_client import FakeTux2LabClient, Tux2LabConnectionError
 from lab_orchestrator.core import instance_manager, janitor
 from lab_orchestrator.core.config import Settings, load_machine_definitions
@@ -79,7 +80,7 @@ async def test_orphaned_in_flight_lease_is_moved_to_cleanup(engine, state):
     await tux2lab.install("lab-m01-aurora-orph1", "image_1_software_1")
     insert_instance(engine, instance_id="orph", state=state, hostname="lab-m01-aurora-orph1")
 
-    report = await reconcile_on_startup(engine=engine, tux2lab=tux2lab)
+    report = await reconcile_on_startup(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}))
 
     row = row_of(engine, "orph")
     assert row["state"] == InstanceState.CLEANUP.value
@@ -96,7 +97,7 @@ async def test_stuck_failed_lease_keeps_its_failure_reason(engine):
         engine, instance_id="failed", state=InstanceState.FAILED, failure_reason="install broke"
     )
 
-    report = await reconcile_on_startup(engine=engine, tux2lab=FakeTux2LabClient())
+    report = await reconcile_on_startup(engine=engine, providers=ProviderRegistry({"tux2lab": FakeTux2LabClient()}))
 
     row = row_of(engine, "failed")
     assert row["state"] == InstanceState.CLEANUP.value
@@ -110,7 +111,7 @@ async def test_stuck_failed_lease_keeps_its_failure_reason(engine):
 async def test_teardown_and_destroyed_leases_are_left_alone(engine, state):
     insert_instance(engine, instance_id="x", state=state)
 
-    report = await reconcile_on_startup(engine=engine, tux2lab=FakeTux2LabClient())
+    report = await reconcile_on_startup(engine=engine, providers=ProviderRegistry({"tux2lab": FakeTux2LabClient()}))
 
     assert row_of(engine, "x")["state"] == state.value
     assert report.cleaned_up == []
@@ -121,7 +122,7 @@ async def test_healthy_lease_with_vm_is_untouched(engine):
     await tux2lab.install("lab-m01-aurora-ok", "image_1_software_1")
     insert_instance(engine, instance_id="ok", state=InstanceState.READY, hostname="lab-m01-aurora-ok")
 
-    report = await reconcile_on_startup(engine=engine, tux2lab=tux2lab)
+    report = await reconcile_on_startup(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}))
 
     assert row_of(engine, "ok")["state"] == InstanceState.READY.value
     assert (report.cleaned_up, report.missing_vms, report.unknown_vms) == ([], [], [])
@@ -135,7 +136,7 @@ async def test_active_lease_with_missing_vm_is_reported_not_changed(engine, stat
     insert_instance(engine, instance_id="gone", state=state, hostname="lab-m01-aurora-gone")
 
     with caplog.at_level(logging.WARNING, logger="lab_orchestrator.core.reconcile"):
-        report = await reconcile_on_startup(engine=engine, tux2lab=FakeTux2LabClient())
+        report = await reconcile_on_startup(engine=engine, providers=ProviderRegistry({"tux2lab": FakeTux2LabClient()}))
 
     assert report.missing_vms == ["gone"]
     assert row_of(engine, "gone")["state"] == state.value
@@ -152,7 +153,7 @@ async def test_unknown_vm_is_reported_not_removed(engine, caplog):
     )
 
     with caplog.at_level(logging.WARNING, logger="lab_orchestrator.core.reconcile"):
-        report = await reconcile_on_startup(engine=engine, tux2lab=tux2lab)
+        report = await reconcile_on_startup(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}))
 
     assert report.unknown_vms == ["lab-m02-forge-stray", "someone-elses-vm"]
     assert len(await tux2lab.list()) == 2
@@ -165,7 +166,7 @@ async def test_tux2lab_unreachable_still_cleans_up_orphans(engine, caplog):
     tux2lab.raise_once = Tux2LabConnectionError("host down")
 
     with caplog.at_level(logging.ERROR, logger="lab_orchestrator.core.reconcile"):
-        report = await reconcile_on_startup(engine=engine, tux2lab=tux2lab)
+        report = await reconcile_on_startup(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}))
 
     assert report.vm_list_failed
     assert report.cleaned_up == ["orph"]
@@ -200,7 +201,7 @@ async def test_killed_mid_install_then_restart_leaves_no_stuck_or_ghost_instance
     )
     task = asyncio.create_task(
         instance_manager.provision_instance(
-            engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+            engine=engine, machines=machines, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings, instance_id=created["id"]
         )
     )
     await asyncio.wait_for(vm_created.wait(), timeout=2)
@@ -216,11 +217,11 @@ async def test_killed_mid_install_then_restart_leaves_no_stuck_or_ghost_instance
 
     # --- restart ---
     with caplog.at_level(logging.WARNING, logger="lab_orchestrator.core.reconcile"):
-        report = await reconcile_on_startup(engine=engine, tux2lab=tux2lab)
+        report = await reconcile_on_startup(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}))
     assert report.cleaned_up == [created["id"]]
     assert f"instance {created['id']} (user alice, VM {hostname}) was PROVISIONING" in caplog.text
 
-    assert await janitor.run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    assert await janitor.run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 1
     row = row_of(engine, created["id"])
     assert row["state"] == InstanceState.DESTROYED.value
     assert await tux2lab.list() == []

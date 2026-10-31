@@ -11,6 +11,8 @@ since has hooked into `lifespan` without changing this file's shape:
   - M7: run startup reconciliation against `tux2lab vm list`, before
     the janitor starts
   - M8: log to stdout, pick the tux2lab backend explicitly
+  - M13: one client per provider that machines.yaml uses (a
+    ProviderRegistry); the per-provider active limits
 """
 
 from __future__ import annotations
@@ -23,6 +25,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from lab_orchestrator.adapters.mercury_sim import FakeMercurySimProvider
+from lab_orchestrator.adapters.provider import MachineProvider, ProviderRegistry
 from lab_orchestrator.adapters.tux2lab_client import (
     FakeTux2LabClient,
     SSHTux2LabClient,
@@ -30,7 +34,12 @@ from lab_orchestrator.adapters.tux2lab_client import (
 )
 from lab_orchestrator.api.routes_instances import router as instances_router
 from lab_orchestrator.api.routes_machines import router as machines_router
-from lab_orchestrator.core.config import Settings, get_settings, load_machine_definitions
+from lab_orchestrator.core.config import (
+    MachineRegistry,
+    Settings,
+    get_settings,
+    load_machine_definitions,
+)
 from lab_orchestrator.core.janitor import janitor_loop
 from lab_orchestrator.core.reconcile import reconcile_on_startup
 from lab_orchestrator.db.database import get_engine
@@ -83,6 +92,24 @@ def make_tux2lab_client(settings: Settings) -> Tux2LabClient:
         return FakeTux2LabClient(simulated_reachability=True)
 
 
+def make_mercury_sim_client(settings: Settings) -> MachineProvider:
+    """The mercury-sim client (architecture doc §18). Only the fake exists
+    until the host CLI and its wrapper do (M13 SP2/SP3); its leases exist
+    nowhere on the network, so it skips the readiness probe.
+    """
+    logger.warning("using FakeMercurySimProvider (LAB_ORCH_MERCURY_SIM_BACKEND=fake) -- no real sims")
+    return FakeMercurySimProvider(simulated_reachability=True)
+
+
+def make_providers(settings: Settings, machines: MachineRegistry) -> ProviderRegistry:
+    """One client per provider that machines.yaml names (enabled or not:
+    a disabled machine may still have leases to clean up)."""
+    factories = {"tux2lab": make_tux2lab_client, "mercury-sim": make_mercury_sim_client}
+    return ProviderRegistry(
+        {name: factories[name](settings) for name in sorted(machines.providers())}
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # --- startup ---
@@ -94,13 +121,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.machines = load_machine_definitions(settings.machines_config_path)
 
     engine = get_engine()
-    init_db(engine, settings.max_active_instances)
+    init_db(engine, provider_limits=settings.provider_limits())
     sync_machine_definitions(engine, app.state.machines)
     app.state.db_engine = engine
 
     # Raises ValueError for backend "ssh" without SSH settings --
     # deliberately unhandled, like the config error above.
-    app.state.tux2lab = make_tux2lab_client(settings)
+    app.state.providers = make_providers(settings, app.state.machines)
 
     # Provisioning tasks (api/routes_instances.py) are tracked here so a
     # task object always has a strong referent — asyncio only holds a
@@ -114,12 +141,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Before the janitor starts and before any request can create a
     # provisioning task, so nothing else is writing to the table yet.
-    await reconcile_on_startup(engine=engine, tux2lab=app.state.tux2lab)
+    await reconcile_on_startup(engine=engine, providers=app.state.providers)
 
     janitor_task = asyncio.create_task(
         janitor_loop(
             engine=app.state.db_engine,
-            tux2lab=app.state.tux2lab,
+            providers=app.state.providers,
             settings=app.state.settings,
         )
     )
@@ -131,7 +158,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     for task in list(app.state.background_tasks):
         task.cancel()
     await asyncio.gather(*app.state.background_tasks, return_exceptions=True)
-    await app.state.tux2lab.close()
+    await app.state.providers.close()
 
 
 def create_app() -> FastAPI:

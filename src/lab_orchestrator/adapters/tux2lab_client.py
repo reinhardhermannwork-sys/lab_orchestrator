@@ -1,24 +1,17 @@
 """SSH/subprocess adapter to the tux2lab CLI (architecture doc §11).
 
-`Tux2LabClient` is an abstract base class matching the architecture doc's
-five-method interface exactly (`install`, `list`, `info`, `start`,
-`remove`). Its *public* methods validate every dynamic value against a
-strict allowed-charset before delegating to a subclass-implemented
-`_do_*` method — this guarantees `FakeTux2LabClient` and
-`SSHTux2LabClient` enforce identical input validation, not just matching
-signatures, which is the actual claim behind M4's done-when ("the fake
-client passes the same test suite as the real one").
+`Tux2LabClient` is the tux2lab implementation of the generic
+`MachineProvider` (adapters/provider.py, architecture doc §18): the base
+class validates every dynamic value before delegating to the `_do_*`
+methods here, so `FakeTux2LabClient` and `SSHTux2LabClient` enforce
+identical input validation, not just matching signatures -- the actual
+claim behind M4's done-when ("the fake client passes the same test suite
+as the real one"). tux2lab has neither a machine setup nor runs, and no
+watchdog: a VM lease keeps the behavior it had before M13.
 
-Two more things live on the base class, built on top of the public
-(validated) methods rather than duplicated per subclass:
-
-- `install_idempotent` / `remove_idempotent` — safe to call after a prior
-  attempt that may or may not have succeeded (architecture doc §14.4: a
-  timeout with no definitive success/failure signal). They check `info()`
-  for a VM already in a post-operation state before treating a fresh
-  `Tux2LabTimeoutError` as a real failure, instead of blindly reissuing a
-  mutating call into a double-provision. instance_manager.py (M5) should
-  call these, not the raw `install`/`remove`, for exactly this reason.
+The data shapes, exceptions and validation moved to provider.py with
+M13; the old `Tux2Lab*` names below are aliases of the generic ones, so
+`except Tux2LabError` and `except ProviderError` catch the same errors.
 
 **Real CLI dialect (M10).** `SSHTux2LabClient` speaks the host wrapper's
 syntax (`deploy/host/lab-orchestrator-wrapper`): tux2lab's own
@@ -45,208 +38,57 @@ from __future__ import annotations
 
 import re
 import shlex
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import TYPE_CHECKING
+
+from lab_orchestrator.adapters.provider import (
+    _HOSTNAME_RE,  # noqa: F401  (re-exported; tests check naming.py against it)
+    HOST_CAPACITY_EXIT,
+    VM,
+    HostCapacityError,
+    InvalidIdentifierError,
+    MachineProvider,
+    ProviderCommandError,
+    ProviderConnectionError,
+    ProviderError,
+    ProviderTimeoutError,
+    VMInfo,
+    VMNotFoundError,
+)
 
 if TYPE_CHECKING:
     import asyncssh
 
     from lab_orchestrator.core.config import Settings
 
-# --- data shapes -----------------------------------------------------
+__all__ = [
+    "HOST_CAPACITY_EXIT",
+    "VM",
+    "FakeTux2LabClient",
+    "HostCapacityError",
+    "InvalidIdentifierError",
+    "SSHTux2LabClient",
+    "Tux2LabClient",
+    "Tux2LabCommandError",
+    "Tux2LabConnectionError",
+    "Tux2LabError",
+    "Tux2LabTimeoutError",
+    "VMInfo",
+    "VMNotFoundError",
+]
+
+# The pre-M13 names, kept so existing callers and tests read as before.
+Tux2LabError = ProviderError
+Tux2LabConnectionError = ProviderConnectionError
+Tux2LabCommandError = ProviderCommandError
+Tux2LabTimeoutError = ProviderTimeoutError
 
 
-@dataclass(frozen=True)
-class VM:
-    """One VM as reported by `tux2lab vm list`."""
+class Tux2LabClient(MachineProvider):
+    """The tux2lab provider: lab VMs from golden images. No setup, no
+    runs, no watchdog (adapters/provider.py)."""
 
-    hostname: str
-    vm_state: str  # e.g. "running", "stopped"
-
-
-@dataclass(frozen=True)
-class VMInfo:
-    """One VM's detail as reported by `tux2lab vm info -H <hostname>`.
-
-    TCP/22 reachability (part of M5's readiness criteria alongside
-    vm_state/os_state) is deliberately *not* a field here — tux2lab has
-    no way to know how reachable a VM is from the orchestrator
-    container's network position. That check belongs in M5, as a plain
-    TCP-connect attempt, not in this adapter.
-    """
-
-    hostname: str
-    vm_state: str  # e.g. "running", "stopped", "error"
-    os_state: str  # e.g. "healthy", "booting", "unknown" — tux2lab's own guest-agent signal
-    ip_address: str | None
-
-
-# --- exceptions --------------------------------------------------------
-
-
-class Tux2LabError(Exception):
-    """Base class for every error this adapter raises."""
-
-
-class Tux2LabConnectionError(Tux2LabError):
-    """Could not reach the host-side wrapper at all (SSH connect failed)."""
-
-
-class Tux2LabCommandError(Tux2LabError):
-    """The wrapper/CLI ran and returned a clear non-zero exit."""
-
-    def __init__(self, message: str, *, exit_status: int | None = None, stderr: str = "") -> None:
-        super().__init__(message)
-        self.exit_status = exit_status
-        self.stderr = stderr
-
-
-class HostCapacityError(Tux2LabCommandError):
-    """The host wrapper refused an install because the host lacks free
-    RAM for the VM plus its reserve (exit 75, EX_TEMPFAIL; architecture
-    doc §11). Definitive: no VM was created, so it is never retried.
-    """
-
-
-# Exit code the wrapper uses for "host out of memory" (EX_TEMPFAIL).
-HOST_CAPACITY_EXIT = 75
-
-
-class Tux2LabTimeoutError(Tux2LabError):
-    """The call timed out with no definitive success/failure signal — the
-    specific "ambiguous" case architecture doc §14.4 calls out. Callers
-    should check `info()`/`list()` before retrying (see
-    `install_idempotent`/`remove_idempotent`) rather than blindly
-    reissuing a mutating call.
-    """
-
-
-class VMNotFoundError(Tux2LabError):
-    """`info()` (or an operation that implies it) was called for a
-    hostname tux2lab doesn't know about.
-    """
-
-
-class InvalidIdentifierError(Tux2LabError, ValueError):
-    """A hostname or image name failed the allowed-charset check before
-    it could cross the SSH boundary (architecture doc §14.3). Also a
-    `ValueError` so ordinary `except ValueError` handling still catches
-    it, matching core/config.py's `MachineConfigError` convention.
-    """
-
-
-# --- input validation (architecture doc §14.3) --------------------------
-
-# RFC 1123 hostname-label shape: lowercase alnum, hyphens, not leading or
-# trailing with one, max 63 chars. Matches what naming.py produces (a
-# single opaque label, no DNS suffix -- architecture doc §5).
-_HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
-
-# tux2lab image names as seen in config/machines.yaml (e.g.
-# "image_1_software_1") — alnum, underscore, hyphen, dot.
-_IMAGE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
-
-
-def _validate_hostname(hostname: str) -> None:
-    if not _HOSTNAME_RE.match(hostname):
-        raise InvalidIdentifierError(f"invalid hostname (fails allowed-charset check): {hostname!r}")
-
-
-def _validate_image_name(image: str) -> None:
-    if not _IMAGE_NAME_RE.match(image):
-        raise InvalidIdentifierError(f"invalid image name (fails allowed-charset check): {image!r}")
-
-
-# --- the adapter interface ---------------------------------------------
-
-
-class Tux2LabClient(ABC):
-    """Matches architecture doc §11's adapter boundary exactly:
-    `install`, `list`, `info`, `start`, `remove`. Subclasses implement
-    the `_do_*` methods; the public methods above them handle input
-    validation so it's identical across every implementation.
-    """
-
-    #: True only for a simulation whose VMs exist nowhere on the network:
-    #: the orchestrator then skips its own TCP/22 readiness probe
-    #: (instance_manager), which could never succeed against them.
-    simulated_reachability: bool = False
-
-    async def install(self, hostname: str, image: str) -> None:
-        _validate_hostname(hostname)
-        _validate_image_name(image)
-        await self._do_install(hostname, image)
-
-    async def list(self) -> list[VM]:
-        return await self._do_list()
-
-    async def info(self, hostname: str) -> VMInfo:
-        _validate_hostname(hostname)
-        return await self._do_info(hostname)
-
-    async def start(self, hostname: str) -> None:
-        _validate_hostname(hostname)
-        await self._do_start(hostname)
-
-    async def remove(self, hostname: str) -> None:
-        _validate_hostname(hostname)
-        await self._do_remove(hostname)
-
-    @abstractmethod
-    async def _do_install(self, hostname: str, image: str) -> None: ...
-
-    @abstractmethod
-    async def _do_list(self) -> list[VM]: ...
-
-    @abstractmethod
-    async def _do_info(self, hostname: str) -> VMInfo: ...
-
-    @abstractmethod
-    async def _do_start(self, hostname: str) -> None: ...
-
-    @abstractmethod
-    async def _do_remove(self, hostname: str) -> None: ...
-
-    async def close(self) -> None:
-        """Release any held resources (e.g. an SSH connection). Safe
-        no-op by default — only `SSHTux2LabClient` actually holds
-        anything to close. Lets main.py call this uniformly at shutdown
-        regardless of which concrete client is wired in.
-        """
-
-    async def install_idempotent(self, hostname: str, image: str) -> None:
-        """Like `install()`, but safe to call again after a prior attempt
-        whose outcome is unknown. See the module docstring and
-        architecture doc §14.4.
-        """
-        try:
-            await self.install(hostname, image)
-        except Tux2LabTimeoutError as timeout_exc:
-            try:
-                await self.info(hostname)
-            except VMNotFoundError:
-                # Genuinely didn't happen — the timeout was a real failure.
-                raise timeout_exc from None
-            # info() succeeded: the install evidently did happen despite
-            # the timeout. Treat this call as an (idempotent) success.
-            return
-
-    async def remove_idempotent(self, hostname: str) -> None:
-        """Like `remove()`, but safe to call again after a prior attempt
-        whose outcome is unknown. See the module docstring and
-        architecture doc §14.4.
-        """
-        try:
-            await self.remove(hostname)
-        except Tux2LabTimeoutError as timeout_exc:
-            try:
-                await self.info(hostname)
-            except VMNotFoundError:
-                # Gone — the remove evidently did happen despite the timeout.
-                return
-            # Still exists: the remove really didn't happen.
-            raise timeout_exc from None
+    name = "tux2lab"
 
 
 # --- fake client (primary day-to-day development target, per the plan) --
@@ -278,7 +120,7 @@ class FakeTux2LabClient(Tux2LabClient):
             exc, self.raise_once = self.raise_once, None
             raise exc
 
-    async def _do_install(self, hostname: str, image: str) -> None:
+    async def _do_install(self, hostname: str, image: str, setup_json: str | None = None) -> None:
         await self._maybe_raise_once()
         if hostname in self._vms:
             raise Tux2LabCommandError(f"VM already exists: {hostname}")
@@ -487,7 +329,7 @@ class SSHTux2LabClient(Tux2LabClient):
     # charset validation already done by the base class's public methods —
     # not a substitute for it.
 
-    async def _do_install(self, hostname: str, image: str) -> None:
+    async def _do_install(self, hostname: str, image: str, setup_json: str | None = None) -> None:
         # Cloning a golden image can outlast the general command timeout.
         await self._run(
             "vm", "install", "-H", shlex.quote(hostname), "-i", shlex.quote(image),

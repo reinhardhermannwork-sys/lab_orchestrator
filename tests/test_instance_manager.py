@@ -18,6 +18,7 @@ import pytest
 import sqlalchemy as sa
 
 from lab_orchestrator import naming
+from lab_orchestrator.adapters.provider import ProviderRegistry
 from lab_orchestrator.adapters.tux2lab_client import (
     FakeTux2LabClient,
     HostCapacityError,
@@ -191,7 +192,7 @@ async def test_provision_instance_happy_path_reaches_ready(
         engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
     )
     await instance_manager.provision_instance(
-        engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+        engine=engine, machines=machines, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings, instance_id=created["id"]
     )
     row = row_of(engine, created["id"])
     assert row["state"] == InstanceState.READY.value
@@ -208,7 +209,7 @@ async def test_provision_instance_with_real_naming_reaches_ready(
         engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
     )
     await instance_manager.provision_instance(
-        engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+        engine=engine, machines=machines, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings, instance_id=created["id"]
     )
     row = row_of(engine, created["id"])
     assert row["state"] == InstanceState.READY.value
@@ -224,7 +225,7 @@ async def test_provision_instance_install_failure_fails_cleanly(
         engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
     )
     await instance_manager.provision_instance(
-        engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+        engine=engine, machines=machines, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings, instance_id=created["id"]
     )
     row = row_of(engine, created["id"])
     assert row["state"] == InstanceState.DESTROYED.value
@@ -239,7 +240,7 @@ async def test_provision_instance_host_out_of_memory_says_the_lab_is_full(
         engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
     )
     await instance_manager.provision_instance(
-        engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+        engine=engine, machines=machines, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings, instance_id=created["id"]
     )
     row = row_of(engine, created["id"])
     assert row["state"] == InstanceState.DESTROYED.value
@@ -257,7 +258,7 @@ async def test_provision_instance_readiness_timeout_fails_cleanly(
         engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
     )
     await instance_manager.provision_instance(
-        engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+        engine=engine, machines=machines, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings, instance_id=created["id"]
     )
     row = row_of(engine, created["id"])
     assert row["state"] == InstanceState.DESTROYED.value
@@ -279,7 +280,7 @@ async def test_provision_instance_simulated_reachability_skips_tcp_probe(
     await instance_manager.provision_instance(
         engine=engine,
         machines=machines,
-        tux2lab=FakeTux2LabClient(simulated_reachability=True),
+        providers=ProviderRegistry({"tux2lab": FakeTux2LabClient(simulated_reachability=True)}),
         settings=settings,
         instance_id=created["id"],
     )
@@ -298,7 +299,7 @@ async def test_provision_instance_removes_vm_on_failure_after_install(
         engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
     )
     await instance_manager.provision_instance(
-        engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+        engine=engine, machines=machines, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings, instance_id=created["id"]
     )
     row = row_of(engine, created["id"])
     assert row["vm_hostname"] is not None
@@ -323,7 +324,7 @@ async def test_provision_instance_illegal_transition_propagates_not_swallowed(
         )
     with pytest.raises(IllegalTransition):
         await instance_manager.provision_instance(
-            engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+            engine=engine, machines=machines, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings, instance_id=created["id"]
         )
 
 
@@ -332,7 +333,7 @@ async def test_provision_instance_unknown_id_is_a_safe_noop(engine, machines, tu
     await instance_manager.provision_instance(
         engine=engine,
         machines=machines,
-        tux2lab=tux2lab,
+        providers=ProviderRegistry({"tux2lab": tux2lab}),
         settings=settings,
         instance_id="does-not-exist",
     )
@@ -376,13 +377,13 @@ async def test_janitor_destroy_during_readiness_polling_is_not_overwritten(
     )
     task = asyncio.create_task(
         instance_manager.provision_instance(
-            engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+            engine=engine, machines=machines, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings, instance_id=created["id"]
         )
     )
     await wait_for_state(engine, created["id"], InstanceState.WAITING_READY)
 
     expire_lease(engine, created["id"])
-    assert await janitor.run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    assert await janitor.run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 1
     destroyed = row_of(engine, created["id"])
 
     await asyncio.wait_for(task, timeout=2)
@@ -417,13 +418,13 @@ async def test_lease_expiring_during_install_does_not_orphan_vm(
     )
     task = asyncio.create_task(
         instance_manager.provision_instance(
-            engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+            engine=engine, machines=machines, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings, instance_id=created["id"]
         )
     )
     await asyncio.wait_for(install_started.wait(), timeout=2)
 
     expire_lease(engine, created["id"])
-    assert await janitor.run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    assert await janitor.run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 1
 
     release_install.set()
     await asyncio.wait_for(task, timeout=2)
@@ -454,7 +455,7 @@ async def test_hostname_is_recorded_before_install(
         engine=engine, machines=machines, settings=settings, user_id="alice", machine_type="machine_1"
     )
     await instance_manager.provision_instance(
-        engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+        engine=engine, machines=machines, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings, instance_id=created["id"]
     )
 
     row = row_of(engine, created["id"])
@@ -488,7 +489,7 @@ async def test_release_during_provisioning_hands_over_cleanly(
     )
     task = asyncio.create_task(
         instance_manager.provision_instance(
-            engine=engine, machines=machines, tux2lab=tux2lab, settings=settings, instance_id=created["id"]
+            engine=engine, machines=machines, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings, instance_id=created["id"]
         )
     )
     await wait_for_state(engine, created["id"], InstanceState.WAITING_READY)
@@ -497,7 +498,7 @@ async def test_release_during_provisioning_hands_over_cleanly(
         engine=engine, instance_id=created["id"], user_id="alice"
     )
     assert released["state"] == InstanceState.DESTROYING.value
-    assert await janitor.run_once(engine=engine, tux2lab=tux2lab, settings=settings) == 1
+    assert await janitor.run_once(engine=engine, providers=ProviderRegistry({"tux2lab": tux2lab}), settings=settings) == 1
     await asyncio.wait_for(task, timeout=2)
 
     row = row_of(engine, created["id"])

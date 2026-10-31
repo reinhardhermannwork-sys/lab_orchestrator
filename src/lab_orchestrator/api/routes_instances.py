@@ -16,20 +16,29 @@ resolved in the architecture doc (§14.6, §14.7):
   404, indistinguishable from an unknown id. The API is still
   unauthenticated and internal-only (§17); these checks back up the web
   frontend's own, they don't replace authentication.
+
+M13 (architecture doc §18) adds runs inside a lease: `POST
+/v1/instances/{id}/runs` starts a recipe on the lease's machine (202,
+the run queued), `GET /v1/instances/{id}/runs` lists them, freshly synced
+from the provider. Both need the owner's `user`, as release does.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
+from lab_orchestrator.adapters.provider import ProviderError
 from lab_orchestrator.api.schemas import (
     CreateInstanceRequest,
     CreateInstanceResponse,
+    CreateRunRequest,
     InstanceResponse,
+    RunResponse,
     SSHConnectionInfo,
 )
 from lab_orchestrator.core import instance_manager
@@ -64,6 +73,9 @@ async def create_instance(body: CreateInstanceRequest, request: Request) -> Crea
             settings=app_state.settings,
             user_id=body.user,
             machine_type=body.machine_type,
+            case_id=body.case_id,
+            setup=body.setup,
+            providers=app_state.providers,
         )
     except instance_manager.UnknownMachineTypeError:
         raise HTTPException(
@@ -73,6 +85,8 @@ async def create_instance(body: CreateInstanceRequest, request: Request) -> Crea
         raise HTTPException(
             status_code=400, detail=f"machine_type '{body.machine_type}' is disabled"
         ) from None
+    except instance_manager.InvalidSetupError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     except instance_manager.QuotaExceededError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
 
@@ -86,7 +100,7 @@ async def create_instance(body: CreateInstanceRequest, request: Request) -> Crea
         instance_manager.provision_instance(
             engine=app_state.db_engine,
             machines=app_state.machines,
-            tux2lab=app_state.tux2lab,
+            providers=app_state.providers,
             settings=app_state.settings,
             instance_id=row["id"],
         )
@@ -103,8 +117,8 @@ def _instance_response(row: dict[str, Any], app_state: Any) -> InstanceResponse:
     machine = app_state.machines.get_machine(row["machine_type"])
     connectable = row["state"] in _CONNECTABLE_STATES
     ssh = None
-    if connectable:
-        ssh = SSHConnectionInfo(username=app_state.settings.vm_ssh_username, port=22)
+    if connectable and machine.protocol == "ssh":
+        ssh = SSHConnectionInfo(username=app_state.settings.vm_ssh_username, port=machine.probe_port)
 
     return InstanceResponse(
         instance_id=row["id"],
@@ -116,6 +130,10 @@ def _instance_response(row: dict[str, Any], app_state: Any) -> InstanceResponse:
         ssh=ssh,
         expires_at=_as_utc(row["expires_at"]),
         failure_reason=row["failure_reason"],
+        provider=row["provider"],
+        protocol=machine.protocol,
+        port=machine.probe_port if connectable else None,
+        case_id=row["case_id"],
     )
 
 
@@ -168,3 +186,68 @@ async def release_instance(
     except instance_manager.InstanceNotFoundError:
         raise HTTPException(status_code=404, detail="instance not found") from None
     return _instance_response(row, app_state)
+
+
+# --- runs inside a lease (M13) ---------------------------------------------
+
+
+def _run_response(row: dict[str, Any]) -> RunResponse:
+    return RunResponse(
+        run_id=row["id"],
+        instance_id=row["instance_id"],
+        recipe=row["recipe"],
+        state=row["state"],
+        created_at=_as_utc(row["created_at"]),
+        started_at=row["started_at"],
+        ended_at=row["ended_at"],
+        result=row["result"],
+        blobs=json.loads(row["blobs_json"]) if row["blobs_json"] else [],
+    )
+
+
+@router.post(
+    "/instances/{instance_id}/runs",
+    response_model=RunResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_run(instance_id: str, body: CreateRunRequest, request: Request) -> RunResponse:
+    """Start a recipe on the lease's machine: 202 with the run queued.
+    400 for a machine without runs or a bad recipe name, 409 while the
+    lease is not READY or another run is going, 502 when the host fails.
+    """
+    app_state = request.app.state
+    try:
+        row = await instance_manager.start_run(
+            engine=app_state.db_engine,
+            providers=app_state.providers,
+            instance_id=instance_id,
+            user_id=body.user,
+            recipe=body.recipe,
+        )
+    except instance_manager.InstanceNotFoundError:
+        raise HTTPException(status_code=404, detail="instance not found") from None
+    except (instance_manager.RunsNotSupportedError, instance_manager.InvalidRecipeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except instance_manager.InstanceNotRunnableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=f"the machine host failed: {exc}") from None
+    return _run_response(row)
+
+
+@router.get("/instances/{instance_id}/runs", response_model=list[RunResponse])
+async def list_runs(
+    instance_id: str, request: Request, user: str | None = Query(default=None, min_length=1)
+) -> list[RunResponse]:
+    """The lease's runs, oldest first. `user` as for GET of the instance."""
+    app_state = request.app.state
+    try:
+        rows = await instance_manager.list_runs(
+            engine=app_state.db_engine,
+            providers=app_state.providers,
+            instance_id=instance_id,
+            user_id=user,
+        )
+    except instance_manager.InstanceNotFoundError:
+        raise HTTPException(status_code=404, detail="instance not found") from None
+    return [_run_response(row) for row in rows]
