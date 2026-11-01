@@ -991,3 +991,22 @@ window (SP2). The walkthrough is in `deploy/host/README.md`.
 
 The instance keeps running on the test VM for SP5 (Fab Suite switch). The old `sim-launcher` and its `msim`
 container are still there until SP6.
+
+### SP5 — Fab Suite switch (2026-11-01)
+
+Plan and decisions in fab-suite `docs/sim-lease.md` (user, 2026-11-01): buttons **Start run + Release** (a machine
+stays up between recipes; Reset is gone), **a recording after each run** (the machine's one blob, saved per run
+with the run's time window in the note), **the viewer's own lease, else the case's newest**.
+
+- Here (L1, 964820a): `GET /v1/instances?case_id=` (a case's active leases of all users, newest first) and the
+  owner `user` in the instance response.
+- Fab Suite (fab-suite 2a3eeae … 18bed2c, mercury-knowledge 8499bfe): sim-screen's lease targets, the
+  Simulation page, the system view's linked mode (no change needed) and the blob viewer's live source follow the
+  case's lease; the launcher is no longer used by Fab Suite.
+- Checks on the test VM pass: `sim-e2e-check.mjs` 25 ok (READY + run 1 at step 1 after 89 s, WASHDOWN 68 s,
+  second run 1 s after Start, both recordings on the case, Release → views back to normal) and
+  `sim-control-check.mjs` 18 ok (machine setup, refused value, Release during a run saves that run).
+
+Seen on the way: the wrapper's CPU check refused a start while the check's browser was installing (load 2.16 + 2
+> 4). Correct behaviour, but a 1-minute load peak is enough to refuse; SP6 measures two machines and sets
+`SIM_CPU`/`SIM_MEMORY_MIB` and the provider limit.
