@@ -1,0 +1,58 @@
+# Simulation instance of the lab orchestrator (M13 SP4, architecture doc §18):
+# its own compose project next to Fab Suite on the test VM, only the
+# simulated Mercury MERCSC0000 (config/machines.sim.yaml), leases through the
+# host CLI mercury-sim behind the restricted wrapper (deploy/host/README.md,
+# "mercury-sim"). The VPS instance (compose.yaml, tux2lab VMs) is separate.
+#
+#   cp deploy/sim.env.example deploy/sim.env      # once, then edit
+#   docker compose -f deploy/compose.sim.yaml up -d --build
+#
+# No published port and no frontend: only containers on Fab Suite's network
+# reach the API, at http://lab-orchestrator-sim:8000. It also joins the
+# simulation network, because the host CLI reports a lease's address as its
+# Mercury container's name there (the readiness probe connects to <lease>:5900).
+# For the walkthrough by hand, run curl in a container on that network
+# (deploy/host/README.md, "mercury-sim": SP4 walkthrough).
+
+name: lab-orchestrator-sim
+
+services:
+  lab-orchestrator-sim:
+    build: ..
+    # Own tag: building never replaces the tux2lab instance's image.
+    image: lab-orchestrator:sim
+    container_name: lab-orchestrator-sim
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file:
+      - sim.env
+    environment:
+      # Container-side paths, fixed to match the mounts below.
+      LAB_ORCH_DB_PATH: /data/orchestrator.db
+      LAB_ORCH_MACHINES_CONFIG_PATH: /etc/lab-orchestrator/machines.yaml
+      LAB_ORCH_MERCURY_SIM_BACKEND: ssh
+      LAB_ORCH_MERCURY_SIM_SSH_KEY_PATH: /run/secrets/lab-orchestrator/tux2lab_ssh_key
+      LAB_ORCH_MERCURY_SIM_SSH_KNOWN_HOSTS_PATH: /run/secrets/lab-orchestrator/known_hosts
+    volumes:
+      - orchestrator-sim-data:/data
+      - ../config/machines.sim.yaml:/etc/lab-orchestrator/machines.yaml:ro
+      # Same host account, key and wrapper as the tux2lab instance. A fixed
+      # path: compose also reads deploy/.env (that instance's file), whose
+      # LAB_ORCH_HOST_SECRETS_DIR is relative to the repo root, not deploy/.
+      - ./secrets:/run/secrets/lab-orchestrator:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - fab-suite
+      - sim
+
+volumes:
+  orchestrator-sim-data:
+
+networks:
+  fab-suite:
+    external: true
+    name: ${FAB_SUITE_NETWORK:-fab-suite_default}
+  sim:
+    external: true
+    name: ${SIM_NETWORK:-mercury-w2}

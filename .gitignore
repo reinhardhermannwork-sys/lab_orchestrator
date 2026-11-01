@@ -22,3 +22,6 @@ secrets/
 *_id_rsa
 
 .env
+
+# simulation instance settings (deploy/compose.sim.yaml)
+deploy/sim.env

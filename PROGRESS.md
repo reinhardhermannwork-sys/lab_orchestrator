@@ -973,3 +973,21 @@ sim.xml) → `info` → `remove`. No containers were started (that is SP4).
 
 Open: `SIM_MEMORY_MIB=1536` / `SIM_CPU=2` are guesses until SP6 measures two leases. The account that runs the CLI
 (`claude` on the test VM) can `sudo docker`; acceptable on the test VM, a dedicated account on any shared host.
+
+### SP4 — instance on the test VM (2026-11-01)
+
+`deploy/compose.sim.yaml` (project `lab-orchestrator-sim`, image tag `lab-orchestrator:sim`, no published port) on
+`fab-suite_default` and `mercury-w2`. The second network is needed because the CLI reports a lease's address as its
+Mercury container's name there, and the readiness probe connects to `<lease>:5900`. Settings in `deploy/sim.env`
+(git-ignored, from `sim.env.example`); key and known_hosts shared with the tux2lab instance. The secrets mount is a
+fixed `./secrets`: compose also reads `deploy/.env`, whose `LAB_ORCH_HOST_SECRETS_DIR` is relative to the repo root.
+
+**Walkthrough on the test VM (curl from a container on Fab Suite's network), all as planned:** lease
+`lab-mrc-mercury-ydh0c` PROVISIONING → STARTING → WAITING_READY → READY in about 1.5 min; WASHDOWN 202 queued → done
+in 68 s, `PROCESS_DONE`, one blob; a second POST meanwhile 409; second WASHDOWN, orchestrator restarted while it ran
+(reconcile: nothing to clean up, lease stays READY) → done in 61 s; release → DESTROYED in 4 s, both containers
+gone, lease folder kept. Both runs name the same blob: Mercury writes one per start, a run is that blob plus its time
+window (SP2). The walkthrough is in `deploy/host/README.md`.
+
+The instance keeps running on the test VM for SP5 (Fab Suite switch). The old `sim-launcher` and its `msim`
+container are still there until SP6.
