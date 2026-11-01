@@ -1040,6 +1040,6 @@ Two users (`sp6a`, `sp6b`), case `sp6`, the SP4 instance, `LAB_ORCH_MAX_ACTIVE_M
 - Open: a run failed by "lease ended" keeps `ended_at` empty (by design these are the host's timestamps, and the
   host never reported an end). Fab Suite saves an aborted run's live blob on release (fab-suite docs/sim-lease.md L2),
   so nothing is lost; whether the API should add the orchestrator's own end time is a question for later.
-- Still to do: stop the old `sim-launcher` user unit and its shared `msim` container on the test VM (needs the
-  user's go; reversible with `systemctl --user enable --now sim-launcher` and `docker start msim`).
+- Launcher retired (user's go, 2026-11-01): `sim-launcher` user unit disabled and stopped, shared `msim` container
+  stopped (kept; undo with `systemctl --user enable --now sim-launcher` and `docker start msim`). M13 done.
 
