@@ -62,6 +62,9 @@ class InstanceResponse(BaseModel):
     protocol: str
     port: int | None = None
     case_id: str | None = None
+    # M13 SP5: the owner, so a case's lease list (Fab Suite) can tell the
+    # viewer's own lease from a colleague's.
+    user: str
 
 
 class CreateRunRequest(BaseModel):

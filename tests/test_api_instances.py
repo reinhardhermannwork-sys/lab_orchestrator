@@ -206,12 +206,37 @@ def test_list_instances_by_user(fast_settings, reachable):
     assert theirs == []
 
 
+def test_list_instances_by_case(fast_settings, reachable):
+    """M13 SP5: a case's active leases of all users, newest first, with the owner."""
+    from lab_orchestrator.main import create_app
+
+    def create(user: str, case_id: str) -> str:
+        r = client.post(
+            "/v1/instances", json={"user": user, "machine_type": "machine_1", "case_id": case_id}
+        )
+        assert r.status_code == 202, r.text
+        return r.json()["instance_id"]
+
+    with TestClient(create_app()) as client:
+        first = create("hermann", "case-1")
+        second = create("anna", "case-1")
+        create("otto", "case-2")
+        listed = client.get("/v1/instances", params={"case_id": "case-1"}).json()
+        both = client.get("/v1/instances", params={"case_id": "case-1", "user": "anna"}).json()
+        none = client.get("/v1/instances", params={"case_id": "case-9"}).json()
+
+    assert [(i["instance_id"], i["user"]) for i in listed] == [(second, "anna"), (first, "hermann")]
+    assert [i["instance_id"] for i in both] == [second]
+    assert none == []
+
+
 def test_list_instances_requires_user(fast_settings):
     from lab_orchestrator.main import create_app
 
     with TestClient(create_app()) as client:
         assert client.get("/v1/instances").status_code == 422
         assert client.get("/v1/instances", params={"user": ""}).status_code == 422
+        assert client.get("/v1/instances", params={"case_id": ""}).status_code == 422
 
 
 def test_instance_response_has_utc_expiry_and_failure_reason(fast_settings, reachable):

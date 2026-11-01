@@ -233,19 +233,22 @@ async def get_instance(*, engine: Engine, instance_id: str) -> dict[str, Any] | 
     return await run_in_threadpool(_select)
 
 
-async def list_active_instances(*, engine: Engine, user_id: str) -> list[dict[str, Any]]:
-    """`user_id`'s active (non-DESTROYED) instances, newest first. At most
-    one in practice -- the per-user quota index (M2) guarantees it -- but
-    returned as a list so the API shape doesn't depend on that rule.
+async def list_active_instances(
+    *, engine: Engine, user_id: str | None = None, case_id: str | None = None
+) -> list[dict[str, Any]]:
+    """Active (non-DESTROYED) instances of `user_id` and/or `case_id`,
+    newest first. One user has at most one in practice -- the per-user
+    quota index (M2) guarantees it -- but it is a list so the API shape
+    doesn't depend on that rule; a case may have one per user (M13 SP5).
     """
-    stmt = (
-        sa.select(instances)
-        .where(
-            instances.c.user_id == user_id,
-            instances.c.state != InstanceState.DESTROYED.value,
-        )
-        .order_by(instances.c.created_at.desc())
-    )
+    if user_id is None and case_id is None:
+        raise ValueError("user_id or case_id is required")
+    stmt = sa.select(instances).where(instances.c.state != InstanceState.DESTROYED.value)
+    if user_id is not None:
+        stmt = stmt.where(instances.c.user_id == user_id)
+    if case_id is not None:
+        stmt = stmt.where(instances.c.case_id == case_id)
+    stmt = stmt.order_by(instances.c.created_at.desc())
 
     def _select() -> list[dict[str, Any]]:
         with engine.connect() as conn:

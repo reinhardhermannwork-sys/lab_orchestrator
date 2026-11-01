@@ -134,6 +134,7 @@ def _instance_response(row: dict[str, Any], app_state: Any) -> InstanceResponse:
         protocol=machine.protocol,
         port=machine.probe_port if connectable else None,
         case_id=row["case_id"],
+        user=row["user_id"],
     )
 
 
@@ -145,10 +146,19 @@ def _as_utc(value: datetime) -> datetime:
 
 @router.get("/instances", response_model=list[InstanceResponse])
 async def list_instances(
-    request: Request, user: str = Query(min_length=1)
+    request: Request,
+    user: str | None = Query(default=None, min_length=1),
+    case_id: str | None = Query(default=None, min_length=1),
 ) -> list[InstanceResponse]:
+    """Active instances, newest first: a user's, a case's (all users;
+    M13 SP5, Fab Suite shows a colleague's lease of the same case), or
+    both filters at once. At least one is required."""
+    if user is None and case_id is None:
+        raise HTTPException(status_code=422, detail="user or case_id is required")
     app_state = request.app.state
-    rows = await instance_manager.list_active_instances(engine=app_state.db_engine, user_id=user)
+    rows = await instance_manager.list_active_instances(
+        engine=app_state.db_engine, user_id=user, case_id=case_id
+    )
     return [_instance_response(row, app_state) for row in rows]
 
 
