@@ -925,7 +925,16 @@ the test VM. Architecture §18; steps SP0–SP6 in `IMPLEMENTATION_PLAN.md` M13.
 
 **Verified:** 211 tests pass (184 existing, unchanged in substance; only the call arguments `tux2lab=` →
 `providers=` changed), `ruff` clean. The new file passed 15 of 15 runs; the only failure seen was the known flaky
-`test_hostnames_do_not_collide_in_practice` (here 5 of 30 runs, untouched by SP1). New `tests/test_mercury_sim.py` (27 tests) covers: config,
+`test_hostnames_do_not_collide_in_practice` (here 5 of 30 runs, untouched by SP1).
+
+### SP2 — host CLI in mercury-lab (2026-11-01)
+
+`w3/mercury_sim.py` and session mode (mercury-lab 82c54d2, its `docs/sim-host.md`). The risk is cleared: two
+WASHDOWNs ran in one Mercury start, then the same through the CLI on a real lease, on the test VM. Two findings for
+this side. First, the host reports a new `os_state` `plant-lost` (Mercury up, its msim gone), which the watchdog now
+fails as "plant simulator gone" (one more watchdog test case). Second, the CLI's exit 4 = run refused, which the SSH
+client (moved into SP3) maps to `RunRefusedError`. Mercury writes one blob per start, so a run's recording is that
+blob plus the run's time window. New `tests/test_mercury_sim.py` (27 tests) covers: config,
 per-provider limits, upgrade of a pre-M13 DB, the provider checks, a sim lease to READY (setup, case, VNC probe only
 once online, the machine's 4 h lifetime), never-online → FAILED, runs one after another, a refused run, run rules,
 the watchdog for each of three faults (lease and run failed, slot free at once), the watchdog leaving healthy,

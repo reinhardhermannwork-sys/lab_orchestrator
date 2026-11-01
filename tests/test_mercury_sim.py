@@ -430,6 +430,7 @@ async def test_run_rules(engine, machines, providers, settings, sim, vms, probes
     ("fault", "reason"),
     [
         ("link_lost", "SECS link lost"),
+        ("plant_lost", "plant simulator gone"),
         ("mercury_gone", "machine stopped (vm_state='exited')"),
         ("vanished", "machine gone (not on the host)"),
     ],

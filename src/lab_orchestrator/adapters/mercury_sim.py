@@ -12,7 +12,8 @@ The host CLI's states in the orchestrator's terms (sim-host.md):
 - `vm_state`: `created | running | exited` -- the Mercury container;
   `exited` while the lease is active means Mercury is gone.
 - `os_state`: `starting` until the SECS host is online, `healthy` while it
-  is, `link-lost` when the link dropped, `n/a` when not running.
+  is, `link-lost` when the link dropped (or the host's heartbeat stopped),
+  `plant-lost` when Mercury runs without its msim, `n/a` when not running.
 
 Only `healthy` counts towards READY. The janitor's watchdog turns
 `link-lost`, a stopped Mercury, or a missing lease into FAILED with that
@@ -43,6 +44,7 @@ from lab_orchestrator.adapters.provider import (
 OS_STARTING = "starting"
 OS_HEALTHY = "healthy"
 OS_LINK_LOST = "link-lost"
+OS_PLANT_LOST = "plant-lost"
 OS_NA = "n/a"
 
 
@@ -183,6 +185,10 @@ class FakeMercurySimProvider(MercurySimProvider):
     def link_lost(self, hostname: str) -> None:
         """The SECS host lost its link to Mercury."""
         self._leases[hostname] = replace(self._lease(hostname), os_state=OS_LINK_LOST)
+
+    def plant_lost(self, hostname: str) -> None:
+        """The lease's plant simulator (msim) stopped; Mercury still runs."""
+        self._leases[hostname] = replace(self._lease(hostname), os_state=OS_PLANT_LOST)
 
     def mercury_gone(self, hostname: str) -> None:
         """The Mercury container stopped on its own."""

@@ -10,7 +10,8 @@ Two more duties came with M13 (architecture doc §18), both run before the
 cleanup in the same pass:
 
 - **Watchdog**, for providers with `watchdog` set (mercury-sim): a running
-  lease whose machine is gone, stopped, or reports `link-lost` moves to
+  lease whose machine is gone, stopped, or reports `link-lost` /
+  `plant-lost` moves to
   FAILED with that reason and on to CLEANUP, so this pass removes it --
   instead of a lease that looks up while nothing works. A provider that
   cannot be reached is not a reason: the next pass looks again.
@@ -217,7 +218,7 @@ _WATCHED_STATES = (
 )
 
 # os_state values that mean the machine is up but no longer works.
-_BROKEN_OS_STATES = {"link-lost": "SECS link lost"}
+_BROKEN_OS_STATES = {"link-lost": "SECS link lost", "plant-lost": "plant simulator gone"}
 
 
 def _watchdog_reason(info: Any) -> str | None:
