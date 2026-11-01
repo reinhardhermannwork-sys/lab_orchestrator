@@ -25,7 +25,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from lab_orchestrator.adapters.mercury_sim import FakeMercurySimProvider
+from lab_orchestrator.adapters.mercury_sim import FakeMercurySimProvider, SSHMercurySimClient
 from lab_orchestrator.adapters.provider import MachineProvider, ProviderRegistry
 from lab_orchestrator.adapters.tux2lab_client import (
     FakeTux2LabClient,
@@ -93,10 +93,13 @@ def make_tux2lab_client(settings: Settings) -> Tux2LabClient:
 
 
 def make_mercury_sim_client(settings: Settings) -> MachineProvider:
-    """The mercury-sim client (architecture doc §18). Only the fake exists
-    until the host CLI and its wrapper do (M13 SP2/SP3); its leases exist
-    nowhere on the network, so it skips the readiness probe.
+    """The mercury-sim client named by `settings.mercury_sim_backend`
+    (architecture doc §18). "ssh" raises ValueError (failing startup)
+    without its SSH settings. The fake's leases exist nowhere on the
+    network, so it skips the readiness probe.
     """
+    if settings.mercury_sim_backend == "ssh":
+        return SSHMercurySimClient.from_settings(settings)
     logger.warning("using FakeMercurySimProvider (LAB_ORCH_MERCURY_SIM_BACKEND=fake) -- no real sims")
     return FakeMercurySimProvider(simulated_reachability=True)
 

@@ -55,10 +55,9 @@ from lab_orchestrator.adapters.provider import (
     VMInfo,
     VMNotFoundError,
 )
+from lab_orchestrator.adapters.ssh_transport import UNSET, SSHTransport, known_hosts_option
 
 if TYPE_CHECKING:
-    import asyncssh
-
     from lab_orchestrator.core.config import Settings
 
 __all__ = [
@@ -157,12 +156,6 @@ class FakeTux2LabClient(Tux2LabClient):
 
 # --- real client ---------------------------------------------------------
 
-# Sentinel distinguishing "don't pass known_hosts at all" (asyncssh's own
-# default: check against ~/.ssh/known_hosts, fail closed if there's no
-# entry) from an explicit `known_hosts=None` (which *disables* host-key
-# checking entirely — a real security downgrade, never the default here).
-_UNSET = object()
-
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 # A `vm list` row after ANSI stripping: FQDN, VM-State (virsh's first word:
@@ -228,18 +221,15 @@ class SSHTux2LabClient(Tux2LabClient):
         port: int,
         username: str,
         client_keys: list[str],
-        known_hosts: object = _UNSET,
+        known_hosts: object = UNSET,
         command_timeout: float = 30.0,
         install_timeout: float = 600.0,
     ) -> None:
-        self._host = host
-        self._port = port
-        self._username = username
-        self._client_keys = client_keys
-        self._known_hosts = known_hosts
+        self._ssh = SSHTransport(
+            host=host, port=port, username=username, client_keys=client_keys, known_hosts=known_hosts
+        )
         self._command_timeout = command_timeout
         self._install_timeout = install_timeout
-        self._conn: asyncssh.SSHClientConnection | None = None
 
     @classmethod
     def from_settings(cls, settings: Settings) -> SSHTux2LabClient:
@@ -257,41 +247,18 @@ class SSHTux2LabClient(Tux2LabClient):
                 f"tux2lab SSH connection settings not configured: {', '.join(missing)} "
                 "(set the matching LAB_ORCH_* env vars)"
             )
-        known_hosts: object = _UNSET
-        if settings.tux2lab_ssh_known_hosts_path is not None:
-            known_hosts = str(settings.tux2lab_ssh_known_hosts_path)
         return cls(
             host=settings.tux2lab_ssh_host,  # type: ignore[arg-type]
             port=settings.tux2lab_ssh_port,
             username=settings.tux2lab_ssh_username,  # type: ignore[arg-type]
             client_keys=[str(settings.tux2lab_ssh_key_path)],
-            known_hosts=known_hosts,
+            known_hosts=known_hosts_option(settings.tux2lab_ssh_known_hosts_path),
             command_timeout=settings.tux2lab_ssh_command_timeout,
             install_timeout=settings.tux2lab_ssh_install_timeout,
         )
 
-    async def _connection(self) -> asyncssh.SSHClientConnection:
-        import asyncssh
-
-        if self._conn is None or self._conn.is_closed():
-            connect_kwargs: dict = {
-                "host": self._host,
-                "port": self._port,
-                "username": self._username,
-                "client_keys": self._client_keys,
-            }
-            if self._known_hosts is not _UNSET:
-                connect_kwargs["known_hosts"] = self._known_hosts
-            try:
-                self._conn = await asyncssh.connect(**connect_kwargs)
-            except (OSError, asyncssh.Error) as exc:
-                raise Tux2LabConnectionError(str(exc)) from exc
-        return self._conn
-
     async def close(self) -> None:
-        if self._conn is not None and not self._conn.is_closed():
-            self._conn.close()
-            await self._conn.wait_closed()
+        await self._ssh.close()
 
     async def _run(self, *args: str, timeout: float | None = None) -> str:
         """Run `tux2lab <args...>` over the wrapper connection. `args`
@@ -300,29 +267,19 @@ class SSHTux2LabClient(Tux2LabClient):
         tux2lab's own `[ERROR]` lines (from stdout) or the wrapper's
         refusal (from stderr) in the message.
         """
-        import asyncssh
-
-        conn = await self._connection()
         command = " ".join(["tux2lab", *args])
-        try:
-            result = await conn.run(command, check=False, timeout=timeout or self._command_timeout)
-        except asyncssh.TimeoutError as exc:
-            raise Tux2LabTimeoutError(command) from exc
-        except asyncssh.Error as exc:
-            raise Tux2LabConnectionError(str(exc)) from exc
-        stdout = str(result.stdout or "")
+        result = await self._ssh.exec(command, timeout=timeout or self._command_timeout)
         if result.exit_status != 0:
-            stderr = str(result.stderr or "")
-            detail = _error_lines(stdout) or stderr.strip()
+            detail = _error_lines(result.stdout) or result.stderr.strip()
             error_cls = (
                 HostCapacityError if result.exit_status == HOST_CAPACITY_EXIT else Tux2LabCommandError
             )
             raise error_cls(
                 f"'{command}' exited {result.exit_status}" + (f": {detail}" if detail else ""),
                 exit_status=result.exit_status,
-                stderr=stderr,
+                stderr=result.stderr,
             )
-        return stdout
+        return result.stdout
 
     # Command syntax is the wrapper's (deploy/host/lab-orchestrator-wrapper).
     # shlex.quote() is a second, independent safety layer on top of the

@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""Stand-in for the simulation host CLI `mercury-sim` (mercury-lab docs/sim-host.md), for tests and rehearsals
+on machines without Mercury. Same verbs, JSON output and exit codes (1 error, 2 usage, 3 no such lease, 4 run
+refused); no containers, the leases live in a JSON file.
+
+    MERCURY_SIM_STANDIN_STATE   state file (default /tmp/mercury-sim-standin.json)
+
+A started lease is healthy at once. Each `runs` call moves a run one step on (queued -> running -> done).
+`install --setup-b64` stores the decoded setup in the state file (tests read it).
+"""
+import base64
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+STATE = Path(os.environ.get('MERCURY_SIM_STANDIN_STATE', '/tmp/mercury-sim-standin.json'))
+LEASE_RE = re.compile(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
+
+def out(value, code=0):
+    print(json.dumps(value))
+    sys.exit(code)
+
+
+def fail(message, code=1):
+    out({'error': message}, code)
+
+
+def opts(args):
+    """['-H', 'x', '-i', 'y'] -> {'-H': 'x', '-i': 'y'}."""
+    if len(args) % 2:
+        fail('usage', 2)
+    return dict(zip(args[::2], args[1::2]))
+
+
+def main(argv):
+    state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    if not argv:
+        fail('usage', 2)
+    verb, o = argv[0], opts(argv[1:])
+    if verb == 'list':
+        out([{'hostname': h, 'vm_state': l['vm_state'], 'os_state': l['os_state']} for h, l in sorted(state.items())])
+    lease = o.get('-H', '')
+    if not LEASE_RE.match(lease):
+        fail('invalid lease name', 2)
+    if verb == 'install':
+        if lease in state:
+            fail(f'lease {lease} exists')
+        setup = None
+        if '--setup-b64' in o:
+            b64 = o['--setup-b64']
+            setup = json.loads(base64.urlsafe_b64decode(b64 + '=' * (-len(b64) % 4)))
+        state[lease] = {'vm_state': 'created', 'os_state': 'n/a', 'image': o.get('-i'), 'setup': setup, 'runs': []}
+        result = {'hostname': lease}
+    elif verb == 'remove':
+        state.pop(lease, None)
+        result = {'hostname': lease}
+    elif lease not in state:
+        fail(f'no such lease: {lease}', 3)
+    else:
+        l = state[lease]
+        if verb == 'start':
+            l.update(vm_state='running', os_state='healthy')
+            result = {'hostname': lease}
+        elif verb == 'info':
+            up = l['vm_state'] == 'running'
+            going = [r['run_id'] for r in l['runs'] if r['state'] == 'running']
+            result = {'hostname': lease, 'vm_state': l['vm_state'], 'os_state': l['os_state'],
+                      'ip': lease if up else None, 'ports': {'hmi': 5900, 'sim': 5901},
+                      'run': going[0] if going else None}
+        elif verb == 'run':
+            if l['os_state'] != 'healthy':
+                fail(f'lease {lease} is not online', 4)
+            if any(r['state'] in ('queued', 'running') for r in l['runs']):
+                fail(f'lease {lease} has a run going', 4)
+            l['runs'].append({'run_id': o['--id'], 'recipe': o['-r'], 'state': 'queued', 'started_at': None,
+                              'ended_at': None, 'result': None, 'blobs': []})
+            result = {'run_id': o['--id'], 'state': 'queued'}
+        elif verb == 'runs':
+            for r in l['runs']:
+                if r['state'] == 'running':
+                    r.update(state='done', ended_at='2026-11-01T00:12:03+00:00', result='PROCESS_DONE',
+                             blobs=['sbmcy/Log/PROCESSCONTROL/639290886208180982.blob'])
+                elif r['state'] == 'queued':
+                    r.update(state='running', started_at='2026-11-01T00:10:55+00:00')
+            result = l['runs']
+        else:
+            fail(f'unknown verb {verb}', 2)
+    STATE.write_text(json.dumps(state))
+    out(result)
+
+
+if __name__ == '__main__':
+    main(sys.argv[1:])

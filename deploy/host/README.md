@@ -1,9 +1,11 @@
-# Host side: the restricted tux2lab wrapper
+# Host side: the restricted wrapper (tux2lab, mercury-sim)
 
-The orchestrator container reaches tux2lab over SSH as the host account
-`lab-orchestrator`. That account's key can do one thing only: run
-`lab-orchestrator-wrapper`, which accepts five tux2lab commands and refuses
-everything else (architecture doc §11, implementation plan M10).
+The orchestrator container reaches the host CLIs over SSH as the host
+account `lab-orchestrator`. That account's key can do one thing only: run
+`lab-orchestrator-wrapper`, which accepts five tux2lab commands and the
+mercury-sim commands, and refuses everything else (architecture doc §11
+and §18, implementation plan M10 and M13). Steps 1–6 set up tux2lab; a
+simulation host additionally needs the section "mercury-sim" below.
 
 ```
 container ──ssh──▶ lab-orchestrator@host ──forced command──▶ wrapper
@@ -144,9 +146,69 @@ stdin from `/dev/null`; its stdout, stderr and exit code are passed through
 unchanged (tux2lab prints errors to stdout). Every call is logged to syslog
 under the tag `lab-orchestrator-wrapper`.
 
+## mercury-sim (simulation host, M13)
+
+On a host with the simulation host CLI (mercury-lab `w3/mercury_sim.py`,
+mercury-lab `docs/sim-host.md`). Do steps 1, 2 and 4 above first; the same
+account, key and wrapper serve both CLIs. `SIM_USER` owns the mercury-lab
+checkout and may run `sudo docker`.
+
+```bash
+SIM_USER=claude                                   # adjust
+CLI=/home/$SIM_USER/mercury-lab/w3/mercury_sim.py
+
+# Root-owned launcher, so the sudoers rule names a file the sim account
+# can't swap. The CLI finds its folders from its own path.
+printf '#!/bin/sh\nexec /usr/bin/python3 %s "$@"\n' "$CLI" \
+  | sudo tee /usr/local/bin/mercury-sim >/dev/null
+sudo chmod 755 /usr/local/bin/mercury-sim
+
+sudo sed -i "s|^MERCURY_SIM_USER=.*|MERCURY_SIM_USER=$SIM_USER|" /etc/lab-orchestrator/wrapper.conf
+echo "lab-orchestrator ALL=($SIM_USER) NOPASSWD: /usr/local/bin/mercury-sim *" \
+  | sudo tee /etc/sudoers.d/lab-orchestrator-mercury-sim >/dev/null
+sudo chmod 440 /etc/sudoers.d/lab-orchestrator-mercury-sim
+sudo visudo -cf /etc/sudoers.d/lab-orchestrator-mercury-sim
+```
+
+(A wrapper.conf from before M13 lacks the mercury-sim lines: copy them
+from `wrapper.conf.example`.) Each image in `config/machines.yaml` (e.g.
+`mercsc0000-v1.2`) needs a row in the CLI's own `mercury-images.conf`
+(mercury-lab `w3/mercury-images.conf.example`); the wrapper only checks
+the name's characters.
+
+The account that runs mercury-sim can use `sudo docker`, which is as good
+as root. The allowlist in the wrapper is the only boundary in front of it,
+so on a shared host give the CLI its own account rather than a person's.
+
+Check by hand:
+
+```bash
+K=deploy/secrets/tux2lab_ssh_key
+sudo ssh -i $K -o IdentitiesOnly=yes lab-orchestrator@127.0.0.1 mercury-sim list               # JSON list
+sudo ssh -i $K -o IdentitiesOnly=yes lab-orchestrator@127.0.0.1 mercury-sim info -H nope; echo $?  # 3
+sudo ssh -i $K -o IdentitiesOnly=yes lab-orchestrator@127.0.0.1 mercury-sim stop -H x; echo $?     # 126
+```
+
+Then `LAB_ORCH_MERCURY_SIM_BACKEND=ssh` and the `LAB_ORCH_MERCURY_SIM_SSH_*`
+settings (host, username, key path, known_hosts path) in the instance's env.
+
+| Request | Runs |
+| --- | --- |
+| `mercury-sim list` | as is |
+| `mercury-sim info\|start\|remove\|runs -H <h>` | as is |
+| `mercury-sim install -H <h> -i <image> [--setup-b64 <b64>]` | as is, or exit 75 if the host lacks RAM or CPU |
+| `mercury-sim run -H <h> -r <recipe> --id <run id>` | as is |
+
+`<recipe>`: `^[A-Za-z0-9_.-]{1,64}$`; `<run id>`: a ULID; `<b64>`: base64url
+without padding, at most 22000 characters (the machine setup JSON; the
+CLI decodes it). The CLI prints JSON; exit 3 = no such lease, 4 = run
+refused.
+
 ## Rehearsing without tux2lab
 
 `stand-in/tux2lab` reproduces the five commands' output (from the tux2lab
 source) for machines that can't run tux2lab, e.g. the test VM, which sits
 inside a tux2lab lab network itself. Install it as the "CLI" in step 1 and
 set its environment in a launcher script; see its header for the settings.
+`stand-in/mercury-sim` does the same for the simulation host CLI (leases in a
+JSON file, no containers); the tests run the wrapper in front of it.

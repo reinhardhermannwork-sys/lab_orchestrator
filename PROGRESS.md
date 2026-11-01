@@ -940,3 +940,36 @@ once online, the machine's 4 h lifetime), never-online → FAILED, runs one afte
 the watchdog for each of three faults (lease and run failed, slot free at once), the watchdog leaving healthy,
 unreachable and VM leases alone, reconcile per provider, and the SP4 walkthrough through the API against the fake
 (lease → READY → run → done → second run → release → DESTROYED, the open run failed "lease ended").
+
+### SP3 — wrapper on the test VM, and the SSH client (2026-11-01)
+
+- `adapters/ssh_transport.py`: the SSH connection that `SSHTux2LabClient` had inline (one reused connection,
+  asyncssh, `known_hosts` never disabled by default), now shared by both SSH clients. tux2lab behaves as before.
+- `SSHMercurySimClient` in `adapters/mercury_sim.py`: `mercury-sim <verb>` through the wrapper, JSON on stdout. Exit
+  3 → `VMNotFoundError`, 4 → `RunRefusedError`, 75 → `HostCapacityError`, others (126 = wrapper refusal) →
+  `ProviderCommandError`. The machine setup crosses SSH as `--setup-b64` (base64url): the wrapper passes only plain
+  words. Settings `LAB_ORCH_MERCURY_SIM_BACKEND=ssh` + `LAB_ORCH_MERCURY_SIM_SSH_*`; startup fails without them.
+- Wrapper: a `mercury-sim` branch (list / info / start / remove / runs / install / run, each with its exact argument
+  shape), run as `MERCURY_SIM_USER` via sudo; before install a RAM check (MemAvailable ≥ SIM_MEMORY_MIB +
+  RESERVE_MIB) and a CPU check (1-min load + SIM_CPU ≤ CPUs), else exit 75. `TUX2LAB_USER` is only required for
+  tux2lab requests now. `deploy/host/stand-in/mercury-sim` mimics the CLI for the tests.
+- mercury-lab: the CLI accepts `--setup-b64` (its `docs/sim-host.md` updated).
+- Test VM: wrapper replaced (old one kept as `wrapper.pre-m13`, also `wrapper.conf.pre-m13`), `wrapper.conf` gets
+  `MERCURY_SIM_USER=claude`, root-owned launcher `/usr/local/bin/mercury-sim`, sudoers file
+  `lab-orchestrator-mercury-sim`. The existing `lab-orchestrator` account and key serve both CLIs. The
+  `mercury-images.conf` row `mercsc0000-v1.2` already existed (SP2). `deploy/host/README.md` has the steps.
+
+**Bug found on the way:** the first version checked the setup word with `^[A-Za-z0-9_-]{1,22000}$`. glibc's regex
+engine (used by bash `=~`) expands a large `{m,n}` into a huge automaton: that one check took over 1.5 GB and the
+OOM killer ended two development sessions. The length is now checked on its own (`${#word}`) and the regex is `+`.
+Keep `{m,n}` bounds small in the wrapper.
+
+**Verified:** 227 tests pass (`tests/test_mercury_sim_ssh.py`: client → a real local SSH server → the real wrapper →
+the stand-in; capacity refusals; bad values never reach SSH; 10 refused request shapes incl. an oversized setup),
+`ruff check` clean; mercury-lab `w3/test_mercury_sim.py` 10 OK (1 skipped as before). On the test VM by hand through
+`ssh lab-orchestrator@127.0.0.1`: `mercury-sim list` → `[]`, `info -H nope` → exit 3, `stop` and `id` → 126,
+`tux2lab vm list` still served, and `install --setup-b64` (profile di-half: HELIOS 31548 → 15774 W in the lease's
+sim.xml) → `info` → `remove`. No containers were started (that is SP4).
+
+Open: `SIM_MEMORY_MIB=1536` / `SIM_CPU=2` are guesses until SP6 measures two leases. The account that runs the CLI
+(`claude` on the test VM) can `sudo docker`; acceptable on the test VM, a dedicated account on any shared host.

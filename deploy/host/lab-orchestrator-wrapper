@@ -10,6 +10,10 @@
 #   tux2lab vm remove  -H <hostname>              → runs with -f added
 #   tux2lab vm install -H <hostname> -i <image>   → -i mapped to -d/-v and
 #                                                   the image's --cpu/--memory
+#   mercury-sim list                               (M13, architecture doc §18)
+#   mercury-sim info|start|remove|runs -H <hostname>
+#   mercury-sim install -H <hostname> -i <image> [--setup-b64 <base64url>]
+#   mercury-sim run -H <hostname> -r <recipe> --id <run id>
 #
 # <hostname> and <image> must match the orchestrator adapter's own patterns
 # (_HOSTNAME_RE, _IMAGE_NAME_RE in adapters/tux2lab_client.py). The real CLI
@@ -23,13 +27,25 @@
 # line on stdout and exits 75 (EX_TEMPFAIL) without calling tux2lab, so a
 # full host refuses new VMs instead of running out of RAM.
 #
+# mercury-sim (the simulation host CLI, mercury-lab docs/sim-host.md) runs
+# the same way as MERCURY_SIM_USER. Before its install the wrapper checks
+# MemAvailable >= SIM_MEMORY_MIB + RESERVE_MIB and, since a simulated
+# Mercury is CPU-bound, 1-minute load + SIM_CPU <= CPUs; otherwise
+# {"error": ...} on stdout and exit 75. The CLI prints JSON itself.
+#
 # Configuration: /etc/lab-orchestrator/wrapper.conf (shell variables)
-#   TUX2LAB_USER   account that runs tux2lab (the lab user)       required
+#   TUX2LAB_USER   account that runs tux2lab (the lab user)       required for tux2lab
 #   TUX2LAB_BIN    path of the tux2lab CLI                        default /usr/local/bin/tux2lab
 #   IMAGES_CONF    image map, "<image> <distro> <version> [<cpu> <memory_gib>]" lines
 #                                                                 default /etc/lab-orchestrator/images.conf
 #   RESERVE_MIB    RAM kept free for the host, on top of the VM   default 1024
 #   MEMINFO        where MemAvailable is read (tests)             default /proc/meminfo
+#   MERCURY_SIM_USER  account that runs mercury-sim               required for mercury-sim
+#   MERCURY_SIM_BIN   path of the mercury-sim CLI                 default /usr/local/bin/mercury-sim
+#   SIM_MEMORY_MIB    RAM one simulation needs                    default 1536
+#   SIM_CPU           CPUs one simulation keeps busy              default 2
+#   LOADAVG           where the load is read (tests)              default /proc/loadavg
+#   NPROC             CPUs of the host (tests)                    default: nproc
 set -uo pipefail
 
 CONF="${LAB_ORCHESTRATOR_WRAPPER_CONF:-/etc/lab-orchestrator/wrapper.conf}"
@@ -38,11 +54,23 @@ TUX2LAB_BIN="/usr/local/bin/tux2lab"
 IMAGES_CONF="/etc/lab-orchestrator/images.conf"
 RESERVE_MIB=1024
 MEMINFO="/proc/meminfo"
+MERCURY_SIM_USER=""
+MERCURY_SIM_BIN="/usr/local/bin/mercury-sim"
+SIM_MEMORY_MIB=1536
+SIM_CPU=2
+LOADAVG="/proc/loadavg"
+NPROC=""
 # shellcheck source=/dev/null
 [[ -r "$CONF" ]] && source "$CONF"
 
 HOSTNAME_RE='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
 IMAGE_RE='^[A-Za-z0-9_.-]{1,128}$'
+RECIPE_RE='^[A-Za-z0-9_.-]{1,64}$'
+RUN_ID_RE='^[0-9A-HJKMNP-TV-Z]{26}$'
+# No {1,22000} bound here: glibc's regex engine expands large repeat
+# counts into gigabytes of RAM. The length is checked on its own instead.
+SETUP_B64_RE='^[A-Za-z0-9_-]+$'
+SETUP_B64_MAX=22000
 TAG="lab-orchestrator-wrapper"
 
 log() { logger -t "$TAG" -- "$*" 2>/dev/null || true; }
@@ -61,8 +89,6 @@ request="${SSH_ORIGINAL_COMMAND:-}"
 [[ "$request" =~ ^[A-Za-z0-9_.\ -]+$ ]] || refuse "unexpected characters"
 read -r -a words <<< "$request"
 [[ "${words[*]}" == "$request" ]] || refuse "unexpected spacing"
-
-[[ -n "$TUX2LAB_USER" ]] || refuse "TUX2LAB_USER not set in $CONF"
 
 check_host() { [[ "$1" =~ $HOSTNAME_RE ]] || refuse "invalid hostname"; }
 
@@ -107,8 +133,73 @@ check_memory() {
     fi
 }
 
+# mercury-sim: exit 75 unless the host has RAM and CPU for one more simulation.
+check_sim_capacity() {
+    local avail_kib need_mib load cpus
+    [[ "$RESERVE_MIB" =~ ^[0-9]+$ && "$SIM_MEMORY_MIB" =~ ^[0-9]+$ && "$SIM_CPU" =~ ^[0-9]+$ ]] \
+        || refuse "RESERVE_MIB, SIM_MEMORY_MIB and SIM_CPU must be numbers"
+    avail_kib=$(awk '/^MemAvailable:/ {print $2; exit}' "$MEMINFO" 2>/dev/null)
+    [[ "$avail_kib" =~ ^[0-9]+$ ]] || refuse "cannot read MemAvailable from $MEMINFO"
+    need_mib=$(( SIM_MEMORY_MIB + RESERVE_MIB ))
+    if (( avail_kib / 1024 < need_mib )); then
+        log "OUT OF MEMORY: ${avail_kib}KiB available, ${need_mib}MiB needed (request: ${request@Q})"
+        echo "{\"error\": \"lab host is out of memory: $(( avail_kib / 1024 )) MiB available, ${need_mib} MiB needed\"}"
+        exit 75
+    fi
+    load=$(awk '{print $1; exit}' "$LOADAVG" 2>/dev/null)
+    [[ "$load" =~ ^[0-9]+(\.[0-9]+)?$ ]] || refuse "cannot read the load from $LOADAVG"
+    cpus=${NPROC:-$(nproc)}
+    [[ "$cpus" =~ ^[0-9]+$ ]] || refuse "NPROC must be a number"
+    if awk -v l="$load" -v c="$SIM_CPU" -v n="$cpus" 'BEGIN { exit !(l + c > n) }'; then
+        log "OUT OF CPU: load $load + $SIM_CPU > $cpus CPUs (request: ${request@Q})"
+        echo "{\"error\": \"lab host is out of CPU: load $load, a simulation needs $SIM_CPU of $cpus CPUs\"}"
+        exit 75
+    fi
+}
+
 declare -a cli
 n=${#words[@]}
+if [[ $n -ge 2 && "${words[0]}" == "mercury-sim" ]]; then
+    [[ -n "$MERCURY_SIM_USER" ]] || refuse "MERCURY_SIM_USER not set in $CONF"
+    verb="${words[1]}"
+    case "$verb" in
+        list)
+            [[ $n -eq 2 ]] || refuse "list takes no arguments"
+            ;;
+        info|start|remove|runs)
+            [[ $n -eq 4 && "${words[2]}" == "-H" ]] || refuse "expected: mercury-sim $verb -H <hostname>"
+            check_host "${words[3]}"
+            ;;
+        install)
+            [[ ($n -eq 6 || ($n -eq 8 && "${words[6]}" == "--setup-b64")) \
+                && "${words[2]}" == "-H" && "${words[4]}" == "-i" ]] \
+                || refuse "expected: mercury-sim install -H <hostname> -i <image> [--setup-b64 <base64url>]"
+            check_host "${words[3]}"
+            [[ "${words[5]}" =~ $IMAGE_RE ]] || refuse "invalid image name"
+            [[ $n -eq 6 || ( ${#words[7]} -le $SETUP_B64_MAX && "${words[7]}" =~ $SETUP_B64_RE ) ]] \
+                || refuse "invalid setup"
+            check_sim_capacity
+            ;;
+        run)
+            [[ $n -eq 8 && "${words[2]}" == "-H" && "${words[4]}" == "-r" && "${words[6]}" == "--id" ]] \
+                || refuse "expected: mercury-sim run -H <hostname> -r <recipe> --id <run id>"
+            check_host "${words[3]}"
+            [[ "${words[5]}" =~ $RECIPE_RE ]] || refuse "invalid recipe"
+            [[ "${words[7]}" =~ $RUN_ID_RE ]] || refuse "invalid run id"
+            ;;
+        *)
+            refuse "command not allowed: mercury-sim $verb"
+            ;;
+    esac
+    cli=("${words[@]:1}")
+    log "RUN: mercury-sim ${cli[*]}"
+    sudo -n -H -u "$MERCURY_SIM_USER" -- "$MERCURY_SIM_BIN" "${cli[@]}" </dev/null
+    status=$?
+    log "EXIT $status: mercury-sim ${cli[*]}"
+    exit "$status"
+fi
+
+[[ -n "$TUX2LAB_USER" ]] || refuse "TUX2LAB_USER not set in $CONF"
 if [[ $n -ge 3 && "${words[0]}" == "tux2lab" && "${words[1]}" == "vm" ]]; then
     case "${words[2]}" in
         list)
