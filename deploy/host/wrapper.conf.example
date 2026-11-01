@@ -29,6 +29,7 @@ MERCURY_SIM_BIN=/usr/local/bin/mercury-sim
 # What one simulation needs. An install is refused (exit 75) when
 # MemAvailable < SIM_MEMORY_MIB + RESERVE_MIB, or when the 1-minute load +
 # SIM_CPU is more than the host's CPUs (a simulated Mercury is CPU-bound).
-# Replace both with measured values after SP6 (two leases in parallel).
-SIM_MEMORY_MIB=1536
-SIM_CPU=2
+# Measured in SP6 (2026-11-01, test VM, 4 CPUs / 6 GB): one sim (Mercury +
+# its msim) takes about 0.9 GB and 0.75-1 CPU, idle or running a recipe.
+SIM_MEMORY_MIB=1024
+SIM_CPU=1

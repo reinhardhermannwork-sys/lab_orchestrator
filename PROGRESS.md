@@ -1010,3 +1010,36 @@ with the run's time window in the note), **the viewer's own lease, else the case
 Seen on the way: the wrapper's CPU check refused a start while the check's browser was installing (load 2.16 + 2
 > 4). Correct behaviour, but a 1-minute load peak is enough to refuse; SP6 measures two machines and sets
 `SIM_CPU`/`SIM_MEMORY_MIB` and the provider limit.
+
+### SP6 — proof on the test VM (2026-11-01)
+
+Two users (`sp6a`, `sp6b`), case `sp6`, the SP4 instance, `LAB_ORCH_MAX_ACTIVE_MERCURY_SIM` raised to 2 in
+`deploy/sim.env`. Load and RAM sampled every 5 s.
+
+| | 1 sim idle | 2 sims idle | 2 sims running WASHDOWN |
+|---|---|---|---|
+| CPU per sim (docker stats) | ~0.7 | ~0.75 | 0.75–0.97 |
+| RAM per sim (Mercury + its msim) | ~0.78 GB | 0.8–0.9 GB | ~0.9 GB |
+| 1-min load (4 CPUs) | 1.6–1.9 | 3.6 | max 4.3 |
+| MemAvailable (6 GB host) | 2.4 GB | 1.55 GB | min 1.47 GB |
+| WASHDOWN | 68 s alone (SP4) | | 68 s each, at the same time |
+
+- **Limit:** at limit 1 a second lease gets 409 ("maximum number … system-wide"). Two in parallel do not slow each
+  other down. A third would leave about 0.5 GB, so the test VM gets 2 (`sim.env.example`). The wrapper's
+  `SIM_MEMORY_MIB`/`SIM_CPU` are now the measured 1024 / 1 (were the guesses 1536 / 2); the code default of the
+  orchestrator limit stays 1 for an unknown host.
+- **The CPU check uses the 1-minute load, which lags.** With `SIM_CPU=2` it refused the second lease while the
+  first was still starting (load 2.90) and again 14 s after a release (load 4.88, the removed sim still in the
+  average). Each refusal was clean: lease DESTROYED within seconds, reason "The lab is full right now … out of CPU".
+  With `SIM_CPU=1` two idle sims (load ~3.6) still refuse a third.
+- **SECS link fault:** during a WASHDOWN on lease A the COM5 socat bridge inside its Mercury container was killed
+  (cable pulled). The watchdog failed the lease 127 s later: READY → FAILED "SECS link lost" → DESTROYED, both
+  containers gone; the run is `failed`, result "lease ended (CLEANUP): SECS link lost". Nothing hung.
+- **No wait after an abort:** lease B released during its run → DESTROYED in 7 s, run `failed` "lease ended
+  (DESTROYING)". A new lease, once the load had settled (2.5 min, CPU check above), was READY 54 s later.
+- Open: a run failed by "lease ended" keeps `ended_at` empty (by design these are the host's timestamps, and the
+  host never reported an end). Fab Suite saves an aborted run's live blob on release (fab-suite docs/sim-lease.md L2),
+  so nothing is lost; whether the API should add the orchestrator's own end time is a question for later.
+- Still to do: stop the old `sim-launcher` user unit and its shared `msim` container on the test VM (needs the
+  user's go; reversible with `systemctl --user enable --now sim-launcher` and `docker start msim`).
+
