@@ -186,6 +186,18 @@ The simulation backend of Fab Suite becomes a lease type of this orchestrator. S
 - **SP6 — proof** *(done 2026-11-01: parallel + fault runs passed on the test VM, launcher stopped; see PROGRESS.md)*: two leases in parallel (measure CPU/RAM → provider limit); SECS link killed → lease FAILED with reason, nothing hangs; no 30-min wait after an abort; then the old `sim-launcher` unit is stopped.
 - **Done when:** SP4's walkthrough and SP6's parallel and fault runs pass on the test VM, and the Fab Suite Simulation pane drives a lease end to end.
 
+### M14 — Simulation backend v2 *(design draft 2026-11-02; docs/sim-backend-v2.md, architecture doc §19)*
+Many machine families and configurations, every entity a state machine, sim-minutes booked to a case/project account. Steps (docs first, tests and a local commit per step; push only on request):
+- **D0 — design doc** *(draft 2026-11-02, waiting for the user's review)*: `docs/sim-backend-v2.md`, architecture §19, this entry.
+- **D1 — transition engine + `transitions` log**; lease and run ported onto it with no behaviour change.
+- **D2 — catalogue + builds** (family / hardware / software / plant / overlay → hashed build); MERCSC0000 v1.2 first, FSI114–116 as hardware entries.
+- **D3 — accounts + charges in sim-minutes**; account required per request; hard stop for new starts when exhausted; estimate; export.
+- **D4 — ls/ps API, host `ps` verb, hosts with slot reservations, operator role, idle timeout.**
+- **D5 — run pause/resume/abort (lockstep), lease suspend/resume (docker pause).**
+- **D6 — request queue, priority classes, preemption.**
+- **D7 — Fab Suite: case account, cost shown on the case.**
+- **Done when:** the done-when column of docs/sim-backend-v2.md §8 holds for D1–D7.
+
 ## 3. Cross-cutting concerns
 
 - **Config/secrets:** all host paths, SSH connection details, and the secrets directory path come from environment variables / a settings module — never hardcoded.

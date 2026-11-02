@@ -664,3 +664,13 @@ fails with "the lab is full", as for VMs.
   the same lease.
 - Session protocol for the simulation is VNC through Fab Suite's `sim-screen` (§14.11); Guacamole for VM leases
   (M11) stays separate.
+
+## 19. Simulation backend v2 (M14, design draft 2026-11-02)
+
+Planned with the user on 2026-11-02; the full design is in [`docs/sim-backend-v2.md`](docs/sim-backend-v2.md).
+Three ground rules: many machine families and configurations (family / hardware / software / plant / setup overlay,
+resolved into a pinned, hashed **build**); every entity is an explicit state machine (one transition engine,
+append-only `transitions` log); every simulation has a cost booked to its requestor (**account per case or project**,
+first metric = **lease wall time in sim-minutes**, hard stop for new starts when the budget is used up). ls/ps,
+priority and run pause/resume are built on these. Status: D0 (docs) only, nothing built.
+

@@ -1,5 +1,8 @@
 # Lab Orchestrator — Progress Log
 
+**Update 2026-11-02:** M14 (simulation backend v2) planned with the user; design draft D0 in
+`docs/sim-backend-v2.md`, waiting for review. Nothing built.
+
 **Update 2026-10-31:** M13 (Mercury simulation provider) SP0 + SP1 done, 211 tests passing — see the M13 section
 at the end.
 
