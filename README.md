@@ -1,5 +1,9 @@
 # Lab Orchestrator
 
+> **Retired 2026-11-07.** Nothing uses this repo any more. Simulated machines moved to `sim-backend`, which also holds the
+> maintained host wrapper (`deploy/host/`) and the design `docs/sim-backend-v2.md`. The copies here are history. Leasing
+> real lab VMs through tux2lab was this repo's own job and has no successor; to bring it back, start from this code.
+
 A small service that leases ephemeral lab VMs to authenticated users. A user
 requests a machine type, the orchestrator provisions a VM through `tux2lab`,
 hands back connection details, and tears the VM down after a lifetime cap or
