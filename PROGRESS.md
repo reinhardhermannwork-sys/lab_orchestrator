@@ -1046,3 +1046,9 @@ Two users (`sp6a`, `sp6b`), case `sp6`, the SP4 instance, `LAB_ORCH_MAX_ACTIVE_M
 - Launcher retired (user's go, 2026-11-01): `sim-launcher` user unit disabled and stopped, shared `msim` container
   stopped (kept; undo with `systemctl --user enable --now sim-launcher` and `docker start msim`). M13 done.
 
+## M13 removed (2026-11-07)
+
+User: "lets remove m13. needs to be done". sim-backend `/v2` replaced it (T7 proof, sim-backend docs/replace-m13.md §3.6). Gone: the
+Mercury provider, runs, the watchdog, machine setup, `config/machines.sim.yaml`, `deploy/compose.sim.yaml`, `deploy/sim.env.example`.
+Stays: tux2lab, the provider registry, the wrapper with its `mercury-sim` branch and stand-in (`tests/test_wrapper_mercury_sim.py`).
+Old DB files keep their `runs` table and `setup_json` column, unused.

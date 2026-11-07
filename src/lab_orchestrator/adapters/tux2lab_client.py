@@ -119,7 +119,7 @@ class FakeTux2LabClient(Tux2LabClient):
             exc, self.raise_once = self.raise_once, None
             raise exc
 
-    async def _do_install(self, hostname: str, image: str, setup_json: str | None = None) -> None:
+    async def _do_install(self, hostname: str, image: str) -> None:
         await self._maybe_raise_once()
         if hostname in self._vms:
             raise Tux2LabCommandError(f"VM already exists: {hostname}")
@@ -286,7 +286,7 @@ class SSHTux2LabClient(Tux2LabClient):
     # charset validation already done by the base class's public methods —
     # not a substitute for it.
 
-    async def _do_install(self, hostname: str, image: str, setup_json: str | None = None) -> None:
+    async def _do_install(self, hostname: str, image: str) -> None:
         # Cloning a golden image can outlast the general command timeout.
         await self._run(
             "vm", "install", "-H", shlex.quote(hostname), "-i", shlex.quote(image),

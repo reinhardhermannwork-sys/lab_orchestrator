@@ -146,7 +146,7 @@ stdin from `/dev/null`; its stdout, stderr and exit code are passed through
 unchanged (tux2lab prints errors to stdout). Every call is logged to syslog
 under the tag `lab-orchestrator-wrapper`.
 
-## mercury-sim (simulation host, M13)
+## mercury-sim (simulation host, for sim-backend)
 
 On a host with the simulation host CLI (mercury-lab `w3/mercury_sim.py`,
 mercury-lab `docs/sim-host.md`). Do steps 1, 2 and 4 above first; the same
@@ -203,37 +203,6 @@ settings (host, username, key path, known_hosts path) in the instance's env.
 without padding, at most 22000 characters (the machine setup JSON; the
 CLI decodes it). The CLI prints JSON; exit 3 = no such lease, 4 = run
 refused.
-
-### Simulation instance (SP4)
-
-`deploy/compose.sim.yaml` runs a second orchestrator, only for `mercsc0000`
-(`config/machines.sim.yaml`), on Fab Suite's network and the simulation
-network, without a published port. It uses the same key and `known_hosts` in
-`deploy/secrets` as the tux2lab instance.
-
-```bash
-cp deploy/sim.env.example deploy/sim.env
-sudo docker compose -f deploy/compose.sim.yaml up -d --build
-```
-
-Walkthrough by hand (curl in a container on Fab Suite's network):
-
-```bash
-c() { sudo docker run --rm --network fab-suite_default curlimages/curl:8.11.1 -s \
-        -H 'Content-Type: application/json' "$@"; echo; }
-A=http://lab-orchestrator-sim:8000/v1
-c -X POST $A/instances -d '{"user":"hermann","machine_type":"mercsc0000","case_id":"x"}'  # 202, PROVISIONING
-I=<instance_id>
-c "$A/instances/$I?user=hermann"                     # … WAITING_READY → READY (about 1.5 min)
-c -X POST $A/instances/$I/runs -d '{"user":"hermann","recipe":"WASHDOWN"}'  # 202 queued
-c "$A/instances/$I/runs?user=hermann"                # running → done, result PROCESS_DONE, blobs
-c -X DELETE "$A/instances/$I?user=hermann"           # DESTROYING → DESTROYED, containers gone
-```
-
-A second run while one is going gets 409. Restarting the orchestrator
-(`sudo docker restart lab-orchestrator-sim`) during a run leaves the lease
-READY and the run finishes. The lease folder (`~/mercury-lab/leases/<lease>`
-of the CLI's account) stays after release, with the recordings.
 
 ## Rehearsing without tux2lab
 

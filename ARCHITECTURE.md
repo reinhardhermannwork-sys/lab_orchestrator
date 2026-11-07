@@ -587,6 +587,9 @@ See `IMPLEMENTATION_PLAN.md` M8 (container packaging) and M10 (host wrapper + re
 
 ## 18. Providers: the Mercury simulation (M13, planned 2026-10-31; SP1 built)
 
+**Removed 2026-11-07.** The Mercury provider, runs, watchdog and machine setup are gone from this orchestrator; sim-backend `/v2` does this
+job. The text below is history. What stays: the provider registry, and the `mercury-sim` part of the host wrapper, which sim-backend uses.
+
 **Why.** A lease exists to run a configured machine and simulate its operation. Fab Suite's simulation of the
 Mercury spray processor (twin **MERCSC0000**, mercury-lab + mercury-reference) had grown its own one-off launcher
 (`mercury-lab w3/sim_launcher.py`), with the problems this orchestrator already solves for VMs: a run that loses its

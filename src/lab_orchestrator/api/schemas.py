@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -17,11 +16,8 @@ class CreateInstanceRequest(BaseModel):
 
     machine_type: str
     user: str = Field(min_length=1)
-    # M13 (architecture doc §18): the Fab Suite case the lease serves, and
-    # the machine setup applied once when the machine is built (only for a
-    # provider that takes one).
+    # The Fab Suite case the lease serves.
     case_id: str | None = Field(default=None, min_length=1, max_length=128)
-    setup: dict[str, Any] | None = None
 
 
 class CreateInstanceResponse(BaseModel):
@@ -57,7 +53,7 @@ class InstanceResponse(BaseModel):
     failure_reason: str | None = None
     # M13: which provider runs the machine, how one reaches it (`ssh` is
     # only filled for protocol ssh; `port` is the machine's probe port,
-    # e.g. the HMI's VNC for a simulation), and the case it serves.
+    # if it has one), and the case it serves.
     provider: str
     protocol: str
     port: int | None = None
@@ -65,30 +61,6 @@ class InstanceResponse(BaseModel):
     # M13 SP5: the owner, so a case's lease list (Fab Suite) can tell the
     # viewer's own lease from a colleague's.
     user: str
-
-
-class CreateRunRequest(BaseModel):
-    """POST /v1/instances/{id}/runs body (M13)."""
-
-    recipe: str = Field(min_length=1)
-    user: str = Field(min_length=1)
-
-
-class RunResponse(BaseModel):
-    """One run inside a lease (M13, architecture doc §18). `started_at` /
-    `ended_at` are the host's own timestamps; `blobs` are the run's
-    recording paths in the lease folder.
-    """
-
-    run_id: str
-    instance_id: str
-    recipe: str
-    state: str
-    created_at: datetime
-    started_at: str | None = None
-    ended_at: str | None = None
-    result: str | None = None
-    blobs: list[str] = []
 
 
 class MachineResponse(BaseModel):

@@ -175,7 +175,7 @@ Run the whole stack without a KVM host: the orchestrator in its normal `ssh` mod
 - Orchestrator-side: an internal endpoint that moves the referenced instance (via `guacamole_connection_id`) to `DISCONNECTED_GRACE`.
 - **Done when:** closing a browser tab mid-session is observed to trigger the 5-minute grace countdown without any frontend polling.
 
-### M13 — Mercury simulation provider *(planned 2026-10-31; architecture doc §18)*
+### M13 — Mercury simulation provider *(built, replaced by sim-backend, removed 2026-11-07; architecture doc §18)*
 The simulation backend of Fab Suite becomes a lease type of this orchestrator. Steps (docs first, tests and a local commit per step; push only on request):
 - **SP0 — docs:** architecture §18, this milestone; mercury-lab `docs/sim-host.md` (host CLI contract); a pointer in fab-suite `docs/sim-control.md`.
 - **SP1 — providers in the orchestrator** *(done 2026-10-31, 211 tests; see PROGRESS.md)*: the §11 adapter becomes a generic provider (`Tux2LabClient` one implementation, `FakeMercurySimProvider` for tests); one client per provider chosen by the machine's `provider`; `MachineDefinition` gets `provider`, `image` (alias of `tux2lab_image`), `probe_port`, `lifetime_hours`, `protocol: ssh | vnc`; instances get `case_id`, `setup_json`, `provider`; the active limit is counted per provider; new `runs` table and `POST/GET /v1/instances/{id}/runs`; watchdog in the janitor (provider reports link lost / gone → FAILED with reason). All existing tests stay green.

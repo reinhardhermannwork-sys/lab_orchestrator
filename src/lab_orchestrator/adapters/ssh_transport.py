@@ -1,11 +1,9 @@
-"""SSH to the host-side restricted wrapper (architecture doc §11), shared
-by the providers that reach a host CLI this way: `SSHTux2LabClient`
-(tux2lab, M4/M10) and `SSHMercurySimClient` (mercury-sim, M13).
+"""SSH to the host-side restricted wrapper (architecture doc §11), for
+`SSHTux2LabClient`.
 
 One lazily opened, reused connection per client. `exec()` returns the
-exit status and both output streams; reading them is each provider's own
-business (tux2lab prints coloured text with errors on stdout, mercury-sim
-prints JSON).
+exit status and both output streams; reading them is the provider's own
+business (tux2lab prints coloured text with errors on stdout).
 """
 
 from __future__ import annotations

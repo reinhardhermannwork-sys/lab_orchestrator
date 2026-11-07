@@ -25,9 +25,8 @@ from lab_orchestrator.db.models import (
     metadata,
 )
 
-# A provider's limit when the caller names none (M13: a simulated Mercury
-# is CPU-bound, so one at a time until measured).
-DEFAULT_PROVIDER_LIMITS = {"tux2lab": 3, "mercury-sim": 1}
+# A provider's limit when the caller names none.
+DEFAULT_PROVIDER_LIMITS = {"tux2lab": 3}
 
 
 def init_db(

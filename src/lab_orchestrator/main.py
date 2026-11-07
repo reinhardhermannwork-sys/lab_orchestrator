@@ -25,8 +25,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from lab_orchestrator.adapters.mercury_sim import FakeMercurySimProvider, SSHMercurySimClient
-from lab_orchestrator.adapters.provider import MachineProvider, ProviderRegistry
+from lab_orchestrator.adapters.provider import ProviderRegistry
 from lab_orchestrator.adapters.tux2lab_client import (
     FakeTux2LabClient,
     SSHTux2LabClient,
@@ -92,22 +91,10 @@ def make_tux2lab_client(settings: Settings) -> Tux2LabClient:
         return FakeTux2LabClient(simulated_reachability=True)
 
 
-def make_mercury_sim_client(settings: Settings) -> MachineProvider:
-    """The mercury-sim client named by `settings.mercury_sim_backend`
-    (architecture doc §18). "ssh" raises ValueError (failing startup)
-    without its SSH settings. The fake's leases exist nowhere on the
-    network, so it skips the readiness probe.
-    """
-    if settings.mercury_sim_backend == "ssh":
-        return SSHMercurySimClient.from_settings(settings)
-    logger.warning("using FakeMercurySimProvider (LAB_ORCH_MERCURY_SIM_BACKEND=fake) -- no real sims")
-    return FakeMercurySimProvider(simulated_reachability=True)
-
-
 def make_providers(settings: Settings, machines: MachineRegistry) -> ProviderRegistry:
     """One client per provider that machines.yaml names (enabled or not:
     a disabled machine may still have leases to clean up)."""
-    factories = {"tux2lab": make_tux2lab_client, "mercury-sim": make_mercury_sim_client}
+    factories = {"tux2lab": make_tux2lab_client}
     return ProviderRegistry(
         {name: factories[name](settings) for name in sorted(machines.providers())}
     )

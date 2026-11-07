@@ -6,19 +6,6 @@ out (`now >= expires_at`) or whose disconnect grace period has elapsed
 DESTROYING, remove the machine through the lease's provider, and record
 DESTROYED.
 
-Two more duties came with M13 (architecture doc §18), both run before the
-cleanup in the same pass:
-
-- **Watchdog**, for providers with `watchdog` set (mercury-sim): a running
-  lease whose machine is gone, stopped, or reports `link-lost` /
-  `plant-lost` moves to
-  FAILED with that reason and on to CLEANUP, so this pass removes it --
-  instead of a lease that looks up while nothing works. A provider that
-  cannot be reached is not a reason: the next pass looks again.
-- **Runs**: the provider's view of every unfinished run is copied into
-  the `runs` table (instance_manager.sync_runs); runs of a lease that has
-  ended are marked failed.
-
 The janitor never writes a state string of its own: every change goes
 through `core.state_machine.next_state()` (LIFETIME_EXPIRED,
 GRACE_EXPIRED, DESTROY_COMPLETE).
@@ -60,7 +47,7 @@ from lab_orchestrator.core.state_machine import (
     InstanceState,
     next_state,
 )
-from lab_orchestrator.db.models import instances, runs, utcnow
+from lab_orchestrator.db.models import instances, utcnow
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
@@ -210,26 +197,6 @@ async def _destroy(engine: Engine, providers: ProviderRegistry, row: Row) -> boo
     return True
 
 
-# Lease states the watchdog checks: the machine should be up and working.
-_WATCHED_STATES = (
-    InstanceState.READY,
-    InstanceState.CONNECTED,
-    InstanceState.DISCONNECTED_GRACE,
-)
-
-# os_state values that mean the machine is up but no longer works.
-_BROKEN_OS_STATES = {"link-lost": "SECS link lost", "plant-lost": "plant simulator gone"}
-
-
-def _watchdog_reason(info: Any) -> str | None:
-    """Why a watched lease's machine no longer works, or None if it does."""
-    if info.vm_state != "running":
-        return f"machine stopped (vm_state={info.vm_state!r})"
-    if info.os_state in _BROKEN_OS_STATES:
-        return _BROKEN_OS_STATES[info.os_state]
-    return None
-
-
 async def _load_rows(engine: Engine, stmt: Any) -> list[Row]:
     def _select() -> list[Row]:
         with engine.connect() as conn:
@@ -238,79 +205,12 @@ async def _load_rows(engine: Engine, stmt: Any) -> list[Row]:
     return await run_in_threadpool(_select)
 
 
-async def watchdog_pass(*, engine: Engine, providers: ProviderRegistry) -> list[str]:
-    """Fail every watched lease whose machine no longer works; return
-    their ids. Each moves FAILED -> CLEANUP, so the cleanup below removes
-    the machine in the same pass.
-    """
-    watched = [name for name, client in providers.items() if client.watchdog]
-    if not watched:
-        return []
-    rows = await _load_rows(
-        engine,
-        sa.select(instances).where(
-            instances.c.provider.in_(watched),
-            instances.c.state.in_([s.value for s in _WATCHED_STATES]),
-            instances.c.vm_hostname.is_not(None),
-        ),
-    )
-    failed: list[str] = []
-    for row in rows:
-        try:
-            info = await providers.get(row["provider"]).info(row["vm_hostname"])
-        except VMNotFoundError:
-            reason: str | None = "machine gone (not on the host)"
-        except ProviderError:
-            logger.exception("watchdog: could not check instance %s; next pass", row["id"])
-            continue
-        else:
-            reason = _watchdog_reason(info)
-        if reason is None:
-            continue
-        state = InstanceState(row["state"])
-        if await transition_if(engine, row["id"], state, Event.FAILED, failure_reason=reason) is None:
-            continue  # moved on meanwhile (released, expired): not ours any more
-        await transition_if(engine, row["id"], InstanceState.FAILED, Event.START_CLEANUP)
-        logger.warning("watchdog: instance %s %s -> FAILED (%s)", row["id"], state.value, reason)
-        failed.append(row["id"])
-    return failed
-
-
-async def runs_pass(*, engine: Engine, providers: ProviderRegistry) -> None:
-    """Sync every lease that has unfinished runs (instance_manager.sync_runs)."""
-    # Imported here: instance_manager imports this module (transition_if).
-    from lab_orchestrator.core.instance_manager import sync_runs
-
-    open_instance_ids = sa.select(runs.c.instance_id).where(
-        runs.c.state.not_in(["done", "failed"])
-    )
-    rows = await _load_rows(
-        engine, sa.select(instances).where(instances.c.id.in_(open_instance_ids))
-    )
-    for row in rows:
-        try:
-            provider = providers.get(row["provider"])
-        except UnknownProviderError:
-            continue
-        await sync_runs(engine=engine, provider=provider, instance=row)
-
-
 async def run_once(*, engine: Engine, providers: ProviderRegistry, settings: Settings) -> int:
-    """Run one pass -- watchdog, runs, cleanup -- and return the number of
-    instances destroyed.
+    """Run one cleanup pass and return the number of instances destroyed.
 
     Each candidate is handled independently: an unexpected error on one
     row is logged and does not stop the rest of the pass.
     """
-    try:
-        await watchdog_pass(engine=engine, providers=providers)
-    except Exception:
-        logger.exception("janitor: watchdog pass failed")
-    try:
-        await runs_pass(engine=engine, providers=providers)
-    except Exception:
-        logger.exception("janitor: runs pass failed")
-
     now = utcnow()
     grace_cutoff = now - timedelta(seconds=settings.disconnect_grace_seconds)
     destroyed = 0

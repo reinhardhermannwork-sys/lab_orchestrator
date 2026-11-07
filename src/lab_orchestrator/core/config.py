@@ -71,37 +71,14 @@ class Settings(BaseSettings):
     # quietly running against a fake.
     tux2lab_backend: Literal["auto", "fake", "ssh"] = "auto"
 
-    # Which client main.py wires in for the mercury-sim provider (M13,
-    # architecture doc §18), when machines.yaml uses it: "fake" (in
-    # memory) or "ssh" (the host CLI mercury-sim behind the same kind of
-    # restricted wrapper as tux2lab; startup fails without the settings
-    # below). No "auto": a sim instance names its backend.
-    mercury_sim_backend: Literal["fake", "ssh"] = "fake"
-    mercury_sim_ssh_host: str | None = None
-    mercury_sim_ssh_port: int = 22
-    mercury_sim_ssh_username: str | None = None
-    mercury_sim_ssh_key_path: Path | None = None
-    mercury_sim_ssh_known_hosts_path: Path | None = None  # None => asyncssh's default checking
-    mercury_sim_ssh_command_timeout: float = 30.0
-    # install copies a Mercury tree (~140 MB); start waits for the plant
-    # (up to 60 s on the host) before it starts Mercury.
-    mercury_sim_ssh_install_timeout: float = 300.0
-    mercury_sim_ssh_start_timeout: float = 180.0
-
     # How many instances may be active at once, across all users, per
     # provider (the DB triggers in db/models.py); applied on restart.
-    # tux2lab's limit is sized to the host's free RAM (architecture doc
-    # §17) and keeps its pre-M13 name; mercury-sim's to the host's CPU
-    # (§18: an idle Mercury takes ~1.8 of the test VM's 4 cores).
+    # tux2lab's limit is sized to the host's free RAM (architecture doc §17).
     max_active_instances: int = Field(default=3, ge=1)
-    max_active_mercury_sim: int = Field(default=1, ge=1)
 
     def provider_limits(self) -> dict[str, int]:
         """Active-instance limit per provider name (db/models.py)."""
-        return {
-            "tux2lab": self.max_active_instances,
-            "mercury-sim": self.max_active_mercury_sim,
-        }
+        return {"tux2lab": self.max_active_instances}
 
     # Level for the lab_orchestrator.* loggers, written to stdout (M8) so
     # they show up in `docker logs`.

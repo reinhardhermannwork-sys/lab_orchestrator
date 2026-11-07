@@ -1,5 +1,4 @@
-"""Table definitions (architecture doc §9, §18): machine_definitions,
-instances, runs.
+"""Table definitions (architecture doc §9): machine_definitions, instances.
 
 Two DB-level quota guarantees live here as real constraints, not app-level
 `if` checks (implementation plan §M2 / architecture doc §14 point 1):
@@ -9,8 +8,7 @@ Two DB-level quota guarantees live here as real constraints, not app-level
   - at most N active instances per provider, across all users: one
     BEFORE INSERT trigger per provider that counts that provider's
     non-DESTROYED rows and aborts the insert past N
-    (`LAB_ORCH_MAX_ACTIVE_INSTANCES`, default 3, for tux2lab;
-    `LAB_ORCH_MAX_ACTIVE_MERCURY_SIM`, default 1, for mercury-sim -- M13)
+    (`LAB_ORCH_MAX_ACTIVE_INSTANCES`, default 3, for tux2lab)
 
 Both rely on SQLite's ordinary single-writer locking to make the
 check-and-insert atomic (see db/database.py for why that's deliberate).
@@ -54,7 +52,7 @@ from sqlalchemy import (
     text,
 )
 
-from lab_orchestrator.adapters.provider import PROVIDERS, RUN_STATES
+from lab_orchestrator.adapters.provider import PROVIDERS
 from lab_orchestrator.core.state_machine import InstanceState
 
 
@@ -107,7 +105,6 @@ instances = Table(
     # finds the right client if machines.yaml changes later.
     Column("provider", String, nullable=False, server_default=text("'tux2lab'")),
     Column("case_id", String, nullable=True),  # Fab Suite case the lease serves
-    Column("setup_json", Text, nullable=True),  # machine setup given at creation
     CheckConstraint(
         "state IN (" + ", ".join(repr(s.value) for s in InstanceState) + ")",
         name="ck_instances_state_valid",
@@ -119,28 +116,6 @@ instances = Table(
 INSTANCES_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("provider", "VARCHAR NOT NULL DEFAULT 'tux2lab'"),
     ("case_id", "VARCHAR"),
-    ("setup_json", "TEXT"),
-)
-
-# Runs inside a lease (M13, architecture doc §18): a recipe on a simulated
-# tool. The id is a ULID the orchestrator assigns and hands to the host,
-# so the host's run folder and this row share it.
-runs = Table(
-    "runs",
-    metadata,
-    Column("id", String, primary_key=True),
-    Column("instance_id", String, ForeignKey("instances.id"), nullable=False, index=True),
-    Column("recipe", String, nullable=False),
-    Column("state", String, nullable=False),
-    Column("created_at", DateTime, nullable=False),
-    Column("started_at", String, nullable=True),  # as the host reports it (ISO 8601)
-    Column("ended_at", String, nullable=True),
-    Column("result", Text, nullable=True),
-    Column("blobs_json", Text, nullable=True),  # JSON list of recording paths
-    CheckConstraint(
-        "state IN (" + ", ".join(repr(s) for s in RUN_STATES) + ")",
-        name="ck_runs_state_valid",
-    ),
 )
 
 # One active instance per user (architecture doc §9 / §14 point 1).
