@@ -13,7 +13,7 @@
 #   mercury-sim list                               (M13, architecture doc §18)
 #   mercury-sim info|start|remove|runs -H <hostname>
 #   mercury-sim install -H <hostname> -i <image> [--setup-b64 <base64url>]
-#   mercury-sim run -H <hostname> -r <recipe> --id <run id>
+#   mercury-sim run -H <hostname> -r <recipe> --id <run id> [--step <n>] [--lot <id>] [--max-run <s>]
 #
 # <hostname> and <image> must match the orchestrator adapter's own patterns
 # (_HOSTNAME_RE, _IMAGE_NAME_RE in adapters/tux2lab_client.py). The real CLI
@@ -67,6 +67,9 @@ HOSTNAME_RE='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
 IMAGE_RE='^[A-Za-z0-9_.-]{1,128}$'
 RECIPE_RE='^[A-Za-z0-9_.-]{1,64}$'
 RUN_ID_RE='^[0-9A-HJKMNP-TV-Z]{26}$'
+STEP_RE='^[0-9]{1,4}$'
+LOT_RE='^[A-Za-z0-9_.-]{1,40}$'
+MAX_RUN_RE='^[1-9][0-9]{0,4}$'
 # No {1,22000} bound here: glibc's regex engine expands large repeat
 # counts into gigabytes of RAM. The length is checked on its own instead.
 SETUP_B64_RE='^[A-Za-z0-9_-]+$'
@@ -181,11 +184,25 @@ if [[ $n -ge 2 && "${words[0]}" == "mercury-sim" ]]; then
             check_sim_capacity
             ;;
         run)
-            [[ $n -eq 8 && "${words[2]}" == "-H" && "${words[4]}" == "-r" && "${words[6]}" == "--id" ]] \
-                || refuse "expected: mercury-sim run -H <hostname> -r <recipe> --id <run id>"
+            [[ $n -ge 8 && "${words[2]}" == "-H" && "${words[4]}" == "-r" && "${words[6]}" == "--id" ]] \
+                || refuse "expected: mercury-sim run -H <hostname> -r <recipe> --id <run id> [--step <n>] [--lot <id>] [--max-run <s>]"
             check_host "${words[3]}"
             [[ "${words[5]}" =~ $RECIPE_RE ]] || refuse "invalid recipe"
             [[ "${words[7]}" =~ $RUN_ID_RE ]] || refuse "invalid run id"
+            i=8   # the options, each at most once and in this order
+            if [[ "${words[i]:-}" == "--step" ]]; then
+                [[ "${words[i+1]:-}" =~ $STEP_RE ]] || refuse "invalid step"
+                i=$((i + 2))
+            fi
+            if [[ "${words[i]:-}" == "--lot" ]]; then
+                [[ "${words[i+1]:-}" =~ $LOT_RE ]] || refuse "invalid lot"
+                i=$((i + 2))
+            fi
+            if [[ "${words[i]:-}" == "--max-run" ]]; then
+                [[ "${words[i+1]:-}" =~ $MAX_RUN_RE ]] || refuse "invalid max-run"
+                i=$((i + 2))
+            fi
+            [[ $i -eq $n ]] || refuse "unexpected run arguments"
             ;;
         *)
             refuse "command not allowed: mercury-sim $verb"

@@ -172,6 +172,19 @@ async def test_bad_values_never_reach_ssh(sim_host):
 
 
 @pytest.mark.parametrize(
+    "options",
+    ["--step 48", "--lot DEMO", "--max-run 300", "--step 0 --max-run 86400", "--step 48 --lot DEMO --max-run 300"],
+)
+def test_wrapper_lets_run_options_through(sim_host, options):
+    host, _client = sim_host
+    status, _stdout, stderr = host.run_wrapper(
+        f"mercury-sim run -H lab-x -r PART-DESOX --id 01JBX0000000000000000000A1 {options}"
+    )
+    assert "refused" not in stderr, stderr
+    assert status != 126
+
+
+@pytest.mark.parametrize(
     "request_line",
     [
         "mercury-sim stop -H lab-x",
@@ -179,7 +192,14 @@ async def test_bad_values_never_reach_ssh(sim_host):
         "mercury-sim install -H lab-x -i img --setup-b64 a+b",
         "mercury-sim install -H lab-x -i img --setup-b64 " + "a" * 22001,  # too long
         "mercury-sim run -H lab-x -r WASHDOWN",
-        "mercury-sim run -H lab-x -r WASHDOWN --id 01JBX0000000000000000000A1 --step 2",
+        "mercury-sim run -H lab-x -r WASHDOWN --id 01JBX0000000000000000000A1 --step x",
+        "mercury-sim run -H lab-x -r WASHDOWN --id 01JBX0000000000000000000A1 --step",
+        "mercury-sim run -H lab-x -r WASHDOWN --id 01JBX0000000000000000000A1 --step 12345",
+        "mercury-sim run -H lab-x -r WASHDOWN --id 01JBX0000000000000000000A1 --lot " + "a" * 41,
+        "mercury-sim run -H lab-x -r WASHDOWN --id 01JBX0000000000000000000A1 --max-run 0",
+        "mercury-sim run -H lab-x -r WASHDOWN --id 01JBX0000000000000000000A1 --max-run 300 --step 2",
+        "mercury-sim run -H lab-x -r WASHDOWN --id 01JBX0000000000000000000A1 --step 2 --step 3",
+        "mercury-sim run -H lab-x -r WASHDOWN --id 01JBX0000000000000000000A1 --other 2",
         "mercury-sim list -H lab-x",
         "mercury-sim info -H Lab_X",
         "id",

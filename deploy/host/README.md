@@ -197,7 +197,7 @@ settings (host, username, key path, known_hosts path) in the instance's env.
 | `mercury-sim list` | as is |
 | `mercury-sim info\|start\|remove\|runs -H <h>` | as is |
 | `mercury-sim install -H <h> -i <image> [--setup-b64 <b64>]` | as is, or exit 75 if the host lacks RAM or CPU |
-| `mercury-sim run -H <h> -r <recipe> --id <run id>` | as is |
+| `mercury-sim run -H <h> -r <recipe> --id <run id> [--step <n>] [--lot <id>] [--max-run <s>]` | as is; the options each at most once, in this order |
 
 `<recipe>`: `^[A-Za-z0-9_.-]{1,64}$`; `<run id>`: a ULID; `<b64>`: base64url
 without padding, at most 22000 characters (the machine setup JSON; the
